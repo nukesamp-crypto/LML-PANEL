@@ -98,7 +98,6 @@
 | مسیر | توضیح |
 |---|---|
 | `/panel` | پنل مدیریت (با رمز) |
-| `/reseller` | پورتال نمایندگان |
 | `/sub/<uuid>` | لینک اشتراک |
 | `/manifest.json` | مانیفست PWA |
 | `/sw.js` | Service Worker |
