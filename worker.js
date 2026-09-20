@@ -3319,7 +3319,9 @@ rules:
 		const ports = String(user.port || "443")
 			.split(",")
 			.map((p) => p.trim())
-			.filter((p) => p.length > 0);
+			.filter((p) => p.length > 0)
+			.filter((p) => TLS_PORTS.has(p)); // TLS-only: a non-TLS port on Cloudflare is always plaintext
+		if (ports.length === 0) ports.push("443");
 		const fp = user.fingerprint || "chrome";
 		const dynPath = encodeURIComponent("/stream/LML_PANEL/" + ((user.uuid || "").split("-")[4] || "default"));
 		const links = [];
@@ -3327,10 +3329,13 @@ rules:
 		const m2 = "💎 LML-CONNECT ❯ [SECURE-MESH]";
 		links.push("vl" + "e" + "ss://" + user.uuid + "@0.0.0.0:1?encryption=none&security=none&type=ws&host=" + host + "&path=" + dynPath + "#" + encodeURIComponent(m1));
 		links.push("vl" + "e" + "ss://" + user.uuid + "@0.0.0.0:1?encryption=none&security=none&type=ws&host=" + host + "&path=" + dynPath + "#" + encodeURIComponent(m2));
-		// Multi-Port Backup Links
-		links.push("vl" + "e" + "ss://" + user.uuid + "@" + host + ":2053?path=" + dynPath + "&security=tls&encryption=none&host=" + host + "&type=ws&sni=" + host + "#" + encodeURIComponent("🛡️ LML ❯ [PORT-2053-BACKUP]"));
-		links.push("vl" + "e" + "ss://" + user.uuid + "@" + host + ":2083?path=" + dynPath + "&security=tls&encryption=none&host=" + host + "&type=ws&sni=" + host + "#" + encodeURIComponent("🛡️ LML ❯ [PORT-2083-BACKUP]"));
-		links.push("vl" + "e" + "ss://" + user.uuid + "@" + host + ":80?path=" + dynPath + "&security=none&encryption=none&host=" + host + "&type=ws#" + encodeURIComponent("⚡ LML ❯ [PORT-80-HTTP]"));
+		// Multi-Port Backup Links — every one TLS-encrypted (no plaintext configs).
+		// Skips ports already produced by the user's own port list below.
+		const BACKUP_TLS_PORTS = ["443", "2053", "2083", "2087", "2096", "8443"];
+		for (const bp of BACKUP_TLS_PORTS) {
+			if (ports.indexOf(bp) >= 0) continue;
+			links.push("vl" + "e" + "ss://" + user.uuid + "@" + host + ":" + bp + "?path=" + dynPath + "&security=tls&encryption=none&host=" + host + "&type=ws&sni=" + host + "#" + encodeURIComponent("⚡ LML ❯ [PORT-" + bp + "-TLS]"));
+		}
 		let remVol = "Unlimited";
 		if (user.limit_gb) {
 			let liveUsedGb = (user.used_gb || 0) + ((GLOBAL_TRAFFIC_CACHE.get(user.username) || 0) / (1024 * 1024 * 1024));
@@ -8498,12 +8503,12 @@ const HTML_TEMPLATES = {
 								<div class="port-grid" id="tlsPortsList"></div>
 							</div>
 							<div class="field">
-								<label>پورت‌های Non-TLS (بدون رمزنگاری)</label>
-								<div class="port-grid" id="nonTlsPortsList"></div>
+								<label>پورت‌های Non-TLS</label>
+								<div class="note">پورت‌های بدون رمزنگاری (۸۰، ۸۰۸۰ و…) حذف شدند — همه‌ی کانفیگ‌ها فقط روی پورت‌های رمزنگاری‌شده‌ی TLS (۴۴۳، ۲۰۵۳، ۲۰۸۳، ۲۰۸۷، ۲۰۹۶، ۸۴۴۳) ساخته می‌شوند.</div>
 							</div>
 							<div class="field">
 								<label for="fCustomPorts">پورت‌های دلخواه (با فاصله جدا کنید)</label>
-								<input type="text" class="input input-mono" id="fCustomPorts" placeholder="8080 2096 8443 5000" autocomplete="off">
+								<input type="text" class="input input-mono" id="fCustomPorts" placeholder="8443 2053 2087 2096" autocomplete="off">
 							</div>
 
 							<div class="field">
@@ -8892,7 +8897,7 @@ const HTML_TEMPLATES = {
 </div>
 
 <div class="modal narrow" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">اسکنر مستقل LML</h3><p class="modal-sub">نسخه 1.0.0 • تست واقعی از اینترنت شما</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
-<div class="note">اسکن دقیق با موتور محلی انجام می‌شود؛ مرورگر به‌تنهایی نمی‌تواند IP و SNI را مستقل انتخاب کند. هیچ درخواستی به مخزن Zeus ارسال نمی‌شود.</div>
+<div class="note">اسکن دقیق با موتور محلی انجام می‌شود؛ مرورگر به‌تنهایی نمی‌تواند IP و SNI را مستقل انتخاب کند. هیچ درخواستی به مخزن خارجی ارسال نمی‌شود.</div>
 <h4>۱. دریافت و اجرا</h4><p>روی ویندوز Python 3.9 یا جدیدتر، و روی اندروید Pydroid نصب کنید. فایل را دانلود و اجرا کنید؛ رابط در مرورگر باز می‌شود. اگر خودکار باز نشد، آدرس چاپ‌شده در ترمینال را باز کنید.</p><a class="btn btn-primary" href="/lml-scanner/download" download>دانلود موتور مستقل</a><pre dir="ltr">python LML-Scanner.py</pre>
 <h4>۲. تست دامنهٔ خودتان</h4><p>دامنه همین پنل را در اسکنر وارد کنید. فایل Worker جدید باید قبلاً مستقر شده باشد. پس از اسکن، «خروجی JSON برای پنل» بگیرید.</p>
 <h4>۳. ورود و اعمال نتایج</h4><input class="input" type="file" id="lmlScanFile" accept=".json,application/json"><label>حداکثر آی‌پی قابل اعمال<input class="input" id="ipCount" type="number" min="1" max="100" value="10"></label><p id="lmlImportSummary">فایلی انتخاب نشده است.</p><div id="ipLoading" class="scan-log hidden"></div><p>نتایج مربوط به اینترنتِ زمان تست هستند. هنگام اعمال، چرخش تصادفی خاموش می‌شود. سپس فرم کاربر را ذخیره کنید. برای تست مجدد همان آی‌پی‌ها، آن‌ها را در بخش دلخواه اسکنر وارد کنید.</p>
@@ -10231,6 +10236,8 @@ function getvIeesLink(username) {
 		if (parsedIps.length > 0) ips = parsedIps;
 	}
 	var ports = String(user.port || '443').split(',').map(function (p) { return p.trim(); }).filter(function (p) { return p.length > 0; });
+	ports = ports.filter(function (p) { return TLS_PORTS.indexOf(p) >= 0; }); // TLS-only: never build a plaintext config
+	if (!ports.length) ports = ['443'];
 	var fp = user.fingerprint || 'chrome';
 	var dynPath = encodeURIComponent('/stream/LML_PANEL/' + (user.uuid ? user.uuid.split('-')[4] : 'default'));
 	var links = [];
@@ -10690,16 +10697,13 @@ function enableRowDrag(tbody) {
    ============================================================ */
 function renderPortCheckboxes(selected) {
 	var tlsBox = $('tlsPortsList'), nonBox = $('nonTlsPortsList');
-	if (!tlsBox || !nonBox) return;
+	if (!tlsBox) return;
 	var sel = Array.isArray(selected) ? selected : null;
 	tlsBox.innerHTML = TLS_PORTS.map(function (p) {
 		var on = sel ? sel.indexOf(p) >= 0 : (p === '443');
 		return '<label class="port-chip"><input type="checkbox" name="ports" value="' + p + '"' + (on ? ' checked' : '') + '><span>' + p + '</span></label>';
 	}).join('');
-	nonBox.innerHTML = NON_TLS_PORTS.map(function (p) {
-		var on = sel ? sel.indexOf(p) >= 0 : (p === '80');
-		return '<label class="port-chip nontls"><input type="checkbox" name="ports" value="' + p + '"' + (on ? ' checked' : '') + '><span>' + p + '</span></label>';
-	}).join('');
+	if (nonBox) nonBox.innerHTML = ''; // plaintext non-TLS ports removed: every generated config must be TLS
 }
 var USER_STEPS = ['vtab-account', 'vtab-network', 'vtab-proxy'];
 var USER_STEP_FA = ['۱', '۲', '۳'];
@@ -11094,9 +11098,9 @@ function handleFormSubmit() {
 		if (vd <= 0 && rd <= 0) { setUserModalTab('vtab-account'); toast('⚠️ وقتی تیک تمدید خودکار روشن است، باید حداقل یکی از فیلدها را پر کنید!', 'warn'); return; }
 	}
 
-	var customPortsArray = String($('fCustomPorts').value || '').replace(/ +/g, ',').split(',').map(function (p) { return p.trim(); }).filter(function (p) { return p.length > 0; });
+	var customPortsArray = String($('fCustomPorts').value || '').replace(/ +/g, ',').split(',').map(function (p) { return p.trim(); }).filter(function (p) { return p.length > 0 && TLS_PORTS.indexOf(p) >= 0; });
 	var checkedPorts = $$('input[name="ports"]:checked').map(function (c) { return c.value; }).concat(customPortsArray);
-	checkedPorts = checkedPorts.filter(function (v2, i2, a2) { return a2.indexOf(v2) === i2; });
+	checkedPorts = checkedPorts.filter(function (v2, i2, a2) { return a2.indexOf(v2) === i2; }).filter(function (p2) { return TLS_PORTS.indexOf(p2) >= 0; });
 	if (!checkedPorts.length) { setUserModalTab('vtab-network'); toast('⚠️ لطفا حداقل یک پورت را برای اتصال انتخاب کنید!', 'warn'); return; }
 
 	var block_porn = $('fBlockPorn').checked ? 1 : 0;
@@ -12043,7 +12047,7 @@ function renderConfigsTab() {
 	if (!list.length) { tbody.innerHTML = ''; if (state) state.innerHTML = emptyState('bolt', 'کاربری یافت نشد', 'برای مشاهده کانفیگ‌ها باید کاربری وجود داشته باشد.'); return; }
 	if (state) state.innerHTML = '';
 	tbody.innerHTML = list.map(function (u) {
-		var ports = String(u.port || '443').split(',').filter(function (p) { return p; }).slice(0, 6).join(' , ');
+		var ports = String(u.port || '443').split(',').map(function (p) { return p.trim(); }).filter(function (p) { return p && TLS_PORTS.indexOf(p) >= 0; }).slice(0, 6).join(' , ') || '443';
 		return '<tr>' +
 			'<td data-col="کاربر"><div class="cell-user"><span class="u-avatar">' + esc(String(u.username).slice(0, 2).toUpperCase()) + '</span><span class="uname mono">' + esc(u.username) + '</span></div></td>' +
 			'<td data-col="پروتکل">' + protoBadges(u) + '</td>' +
@@ -14770,6 +14774,8 @@ ${COMMON_TOAST_HTML}
 				if (parsedIps.length > 0) ips = parsedIps;
 			}
 			var ports = String(u.port || '443').split(',').map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; });
+			ports = ports.filter(function(p) { return ["443", "2053", "2083", "2087", "2096", "8443"].indexOf(p) >= 0; }); // TLS-only
+			if (!ports.length) ports = ['443'];
 			var fp = u.fingerprint || 'chrome';
 			const dynPath = encodeURIComponent("/stream/LML_PANEL/" + (u.uuid ? u.uuid.split("-")[4] : "default"));
 			const links = [];
