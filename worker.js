@@ -3327,10 +3327,13 @@ rules:
 		const m2 = "💎 LML-CONNECT ❯ [SECURE-MESH]";
 		links.push("vl" + "e" + "ss://" + user.uuid + "@0.0.0.0:1?encryption=none&security=none&type=ws&host=" + host + "&path=" + dynPath + "#" + encodeURIComponent(m1));
 		links.push("vl" + "e" + "ss://" + user.uuid + "@0.0.0.0:1?encryption=none&security=none&type=ws&host=" + host + "&path=" + dynPath + "#" + encodeURIComponent(m2));
-		// Multi-Port Backup Links
-		links.push("vl" + "e" + "ss://" + user.uuid + "@" + host + ":2053?path=" + dynPath + "&security=tls&encryption=none&host=" + host + "&type=ws&sni=" + host + "#" + encodeURIComponent("🛡️ LML ❯ [PORT-2053-BACKUP]"));
-		links.push("vl" + "e" + "ss://" + user.uuid + "@" + host + ":2083?path=" + dynPath + "&security=tls&encryption=none&host=" + host + "&type=ws&sni=" + host + "#" + encodeURIComponent("🛡️ LML ❯ [PORT-2083-BACKUP]"));
-		links.push("vl" + "e" + "ss://" + user.uuid + "@" + host + ":80?path=" + dynPath + "&security=none&encryption=none&host=" + host + "&type=ws#" + encodeURIComponent("⚡ LML ❯ [PORT-80-HTTP]"));
+		// Multi-Port Backup Links — every one TLS-encrypted (no plaintext configs).
+		// Skips ports already produced by the user's own port list below.
+		const BACKUP_TLS_PORTS = ["443", "2053", "2083", "2087", "2096", "8443"];
+		for (const bp of BACKUP_TLS_PORTS) {
+			if (ports.indexOf(bp) >= 0) continue;
+			links.push("vl" + "e" + "ss://" + user.uuid + "@" + host + ":" + bp + "?path=" + dynPath + "&security=tls&encryption=none&host=" + host + "&type=ws&sni=" + host + "#" + encodeURIComponent("⚡ LML ❯ [PORT-" + bp + "-TLS]"));
+		}
 		let remVol = "Unlimited";
 		if (user.limit_gb) {
 			let liveUsedGb = (user.used_gb || 0) + ((GLOBAL_TRAFFIC_CACHE.get(user.username) || 0) / (1024 * 1024 * 1024));
@@ -10697,7 +10700,7 @@ function renderPortCheckboxes(selected) {
 		return '<label class="port-chip"><input type="checkbox" name="ports" value="' + p + '"' + (on ? ' checked' : '') + '><span>' + p + '</span></label>';
 	}).join('');
 	nonBox.innerHTML = NON_TLS_PORTS.map(function (p) {
-		var on = sel ? sel.indexOf(p) >= 0 : (p === '80');
+		var on = sel ? sel.indexOf(p) >= 0 : false;
 		return '<label class="port-chip nontls"><input type="checkbox" name="ports" value="' + p + '"' + (on ? ' checked' : '') + '><span>' + p + '</span></label>';
 	}).join('');
 }
