@@ -137,6 +137,168 @@ function lmlHttpTwin(port) {
 	if (LML_HTTP_PORTS.indexOf(p) >= 0) return p;
 	return "80";
 }
+
+/* ============================================================
+   LML IP TESTER — تست واقعی آی‌پی تمیز از داخل ورکر
+   یک TLS ClientHello با SNI=دامنه‌ی پنل به ip:port می‌فرستد و
+   بررسی می‌کند لبه‌ی کلودفلر پاسخ می‌دهد و گواهی دامنه را سرو
+   می‌کند یا نه. نتیجه: آی‌پی‌های مردود خودکار از کانفیگ‌ها حذف
+   می‌شوند ⇒ خطای SSL/CCL هرگز رخ نمی‌دهد. هرگز throw نمی‌کند.
+   ============================================================ */
+function lmlConcatBytes(chunks) {
+	let n = 0;
+	for (let i = 0; i < chunks.length; i++) n += chunks[i].length;
+	const out = new Uint8Array(n);
+	let o = 0;
+	for (let i = 0; i < chunks.length; i++) { out.set(chunks[i], o); o += chunks[i].length; }
+	return out;
+}
+function lmlBytesContain(bytes, str) {
+	const pat = new TextEncoder().encode(String(str || "").toLowerCase());
+	if (!pat.length || pat.length > bytes.length) return false;
+	outer:
+	for (let i = 0; i + pat.length <= bytes.length; i++) {
+		for (let j = 0; j < pat.length; j++) {
+			const b = bytes[i + j];
+			const p = pat[j];
+			if (b !== p && !(p >= 97 && p <= 122 && b === p - 32)) continue outer;
+		}
+		return true;
+	}
+	return false;
+}
+function lmlCertHasDomain(bytes, domain) {
+	const d = String(domain || "").toLowerCase();
+	if (!d) return false;
+	if (lmlBytesContain(bytes, d)) return true;
+	const parts = d.split(".");
+	if (parts.length > 2 && lmlBytesContain(bytes, "*." + parts.slice(1).join("."))) return true;
+	return false;
+}
+function lmlBuildClientHello(serverName) {
+	const hostBytes = new TextEncoder().encode(String(serverName));
+	const rnd = new Uint8Array(32);
+	crypto.getRandomValues(rnd);
+	const ciphers = [0xc02c, 0xc030, 0xc02b, 0xc02f, 0xcca9, 0xcca8, 0xc013, 0xc014, 0x009c, 0x009d, 0x002f, 0x0035, 0x000a, 0x00ff];
+	function ext(type, payload) {
+		const b = new Uint8Array(4 + payload.length);
+		b[0] = (type >> 8) & 255; b[1] = type & 255;
+		b[2] = (payload.length >> 8) & 255; b[3] = payload.length & 255;
+		b.set(payload, 4);
+		return b;
+	}
+	const sniEntry = new Uint8Array(3 + hostBytes.length);
+	sniEntry[0] = 0;
+	sniEntry[1] = (hostBytes.length >> 8) & 255; sniEntry[2] = hostBytes.length & 255;
+	sniEntry.set(hostBytes, 3);
+	const sniList = new Uint8Array(2 + sniEntry.length);
+	sniList[0] = (sniEntry.length >> 8) & 255; sniList[1] = sniEntry.length & 255;
+	sniList.set(sniEntry, 2);
+	const exts = [
+		ext(0x0000, sniList),
+		ext(0x000b, new Uint8Array([0x01, 0x00])),
+		ext(0x000a, new Uint8Array([0x00, 0x08, 0x00, 0x1d, 0x00, 0x17, 0x00, 0x18, 0x00, 0x19])),
+		ext(0x000d, new Uint8Array([0x00, 0x14, 0x04, 0x03, 0x05, 0x03, 0x06, 0x03, 0x08, 0x04, 0x08, 0x05, 0x08, 0x06, 0x04, 0x01, 0x05, 0x01, 0x06, 0x01, 0x02, 0x01])),
+		ext(0x0017, new Uint8Array(0)),
+		ext(0x0023, new Uint8Array(0)),
+	];
+	let extTotal = 0;
+	for (let i = 0; i < exts.length; i++) extTotal += exts[i].length;
+	const csLen = ciphers.length * 2;
+	const body = new Uint8Array(2 + 32 + 1 + 2 + csLen + 2 + 2 + extTotal);
+	let o = 0;
+	const putU8 = function (v) { body[o++] = v & 255; };
+	const putU16 = function (v) { body[o++] = (v >> 8) & 255; body[o++] = v & 255; };
+	const put = function (a) { body.set(a, o); o += a.length; };
+	putU16(0x0303);
+	put(rnd);
+	putU8(0);
+	putU16(csLen);
+	for (let i = 0; i < ciphers.length; i++) putU16(ciphers[i]);
+	putU8(1); putU8(0);
+	putU16(extTotal);
+	for (let i = 0; i < exts.length; i++) put(exts[i]);
+	const hs = new Uint8Array(4 + body.length);
+	hs[0] = 1;
+	hs[1] = (body.length >> 16) & 255; hs[2] = (body.length >> 8) & 255; hs[3] = body.length & 255;
+	hs.set(body, 4);
+	const rec = new Uint8Array(5 + hs.length);
+	rec[0] = 0x16; rec[1] = 3; rec[2] = 1;
+	rec[3] = (hs.length >> 8) & 255; rec[4] = hs.length & 255;
+	rec.set(hs, 5);
+	return rec;
+}
+async function lmlProbeIpTls(ip, port, sniDomain, timeoutMs) {
+	const t0 = Date.now();
+	let sock = null;
+	let hardTimer = null;
+	const fin = function (ok, reason) { return { ok: !!ok, ms: Date.now() - t0, reason: reason }; };
+	try {
+		sock = connect({ hostname: String(ip), port: Number(port) || 443 });
+		const hello = lmlBuildClientHello(sniDomain);
+		const writer = sock.writable.getWriter();
+		const reader = sock.readable.getReader();
+		const chunks = [];
+		let total = 0;
+		let found = false;
+		const readAll = (async function () {
+			try {
+				await writer.write(hello);
+				while (total < 16000) {
+					const res = await reader.read();
+					if (res.done || !res.value || res.value.length === 0) break;
+					chunks.push(res.value);
+					total += res.value.length;
+					if (!found) found = lmlCertHasDomain(lmlConcatBytes(chunks), sniDomain);
+					if (found || total >= 6000) break;
+				}
+			} catch (e) { }
+			return false;
+		})();
+		const timedOut = await Promise.race([
+			readAll,
+			new Promise(function (resolve) {
+				hardTimer = setTimeout(function () {
+					try { sock.close(); } catch (e) { }
+					resolve(true);
+				}, timeoutMs || 4500);
+			})
+		]);
+		if (hardTimer) clearTimeout(hardTimer);
+		const bytes = lmlConcatBytes(chunks);
+		if (timedOut && !bytes.length) return fin(false, "تایم‌اوت — این آی‌پی روی پورت " + (Number(port) || 443) + " پاسخ نداد");
+		if (!bytes.length) return fin(false, "پاسخی دریافت نشد — پورت بسته یا آی‌پی در دسترس نیست");
+		if (bytes[0] === 0x15) return fin(false, "TLS رد شد — آی‌پی لبه‌ی کلودفلر نیست یا دامنه‌ی شما را سرو نمی‌دهد");
+		if (bytes[0] !== 0x16) return fin(false, "این آی‌پی روی این پورت TLS حرف نمی‌زند");
+		if (lmlCertHasDomain(bytes, sniDomain)) return fin(true, "آی‌پی لبه‌ی کلودفلر با گواهی معتبر دامنه‌ی شما ✓");
+		return fin(false, "TLS برقرار شد ولی گواهی متعلق به دامنه‌ی شما نیست");
+	} catch (e) {
+		return fin(false, "خطای اتصال: " + String((e && e.message) || e).slice(0, 70));
+	} finally {
+		if (hardTimer) clearTimeout(hardTimer);
+		try { if (sock) sock.close(); } catch (e) { }
+	}
+}
+let LML_IP_TEST_MEM = { at: 0, map: null };
+async function lmlGetBadIps(env) {
+	try {
+		const now = Date.now();
+		if (LML_IP_TEST_MEM.map && (now - LML_IP_TEST_MEM.at) < 300000) return LML_IP_TEST_MEM.map;
+		const map = {};
+		if (env && env.DB) {
+			const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ip_test_cache'").first();
+			if (row && row.value) {
+				const j = JSON.parse(row.value);
+				for (const k in j) {
+					const e = j[k];
+					if (e && Number(e.ok) === 0 && (now - (Number(e.at) || 0)) < 86400000) map[k] = 1;
+				}
+			}
+		}
+		LML_IP_TEST_MEM = { at: now, map: map };
+		return map;
+	} catch (e) { return {}; }
+}
 /* دامنه‌ی واقعی پنل: هرگز آی‌پی نمی‌شود (منبع خطای SSL در مرورگر همین بود) */
 let LML_PANEL_HOST_CACHE = "";
 async function lmlPanelHostSave(env, host) {
@@ -1177,7 +1339,10 @@ const Router = {
 					const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
 					randomIps.forEach(function (ip) { if (mergedSt.indexOf(ip) < 0) mergedSt.push(ip); });
 				}
-				if (mergedSt.length > 0) user.ips = mergedSt.join("\n");
+				if (mergedSt.length > 0) {
+					const badIpsSt = await lmlGetBadIps(env);
+					user.ips = mergedSt.filter(function (ip) { return !badIpsSt[ip]; }).join("\n");
+				}
 			}
 			const userIpsMap = GLOBAL_ACTIVE_IPS.get(user.username);
 			const liveIpCount = userIpsMap ? userIpsMap.size : 0;
@@ -1812,6 +1977,47 @@ const Router = {
 				if (ranges[p].length && status[p] !== "static") status[p] = "fallback";
 			});
 			return { ranges: ranges, status: status };
+		}
+		if (url.pathname === "/api/test-ips" && request.method === "POST") {
+			try {
+				const session = await DbService.getSession(request, env);
+				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				const body = await readJsonBody(request);
+				const sniHost = await lmlPanelHostResolve(env, url.hostname);
+				const rawList = Array.isArray(body.ips) ? body.ips : String(body.ips || "").split(/[\s,]+/);
+				const portT = [443, 2053, 2083, 2087, 2096, 8443].indexOf(String(body.port)) >= 0 ? Number(body.port) : 443;
+				const ips = [];
+				const seenT = {};
+				rawList.forEach(function (x) {
+					x = String(x || "").trim();
+					if (/^\d{1,3}(\.\d{1,3}){3}$/.test(x) && !seenT[x] && ips.length < 40) { seenT[x] = 1; ips.push(x); }
+				});
+				if (!ips.length) return new Response(JSON.stringify({ success: true, host: sniHost, results: [] }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
+				const results = [];
+				const BATCH = 8;
+				for (let i = 0; i < ips.length; i += BATCH) {
+					const slice = ips.slice(i, i + BATCH);
+					const rs = await Promise.all(slice.map(function (ip) { return lmlProbeIpTls(ip, portT, sniHost, 4500); }));
+					rs.forEach(function (r, k) { results.push({ ip: slice[k], ok: r.ok ? 1 : 0, ms: r.ms, reason: r.reason }); });
+				}
+				try {
+					const nowT = Date.now();
+					let cacheJ = {};
+					const rowT = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ip_test_cache'").first();
+					if (rowT && rowT.value) { try { cacheJ = JSON.parse(rowT.value) || {}; } catch (e) { cacheJ = {}; } }
+					results.forEach(function (r) { cacheJ[r.ip] = { ok: r.ok, at: nowT }; });
+					const keysT = Object.keys(cacheJ);
+					if (keysT.length > 400) {
+						keysT.sort(function (a, b) { return (cacheJ[a].at || 0) - (cacheJ[b].at || 0); });
+						keysT.slice(0, keysT.length - 400).forEach(function (k) { delete cacheJ[k]; });
+					}
+					await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lml_ip_test_cache', ?)").bind(JSON.stringify(cacheJ)).run();
+					LML_IP_TEST_MEM = { at: 0, map: null };
+				} catch (e) { }
+				return new Response(JSON.stringify({ success: true, host: sniHost, results: results }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+			} catch (e) {
+				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+			}
 		}
 		if (url.pathname === "/api/scan-ips" && request.method === "POST") {
 			try {
@@ -2558,6 +2764,7 @@ const Router = {
 				GLOBAL_IPS_CACHE = {};
 				GLOBAL_IPS_LAST_FETCH = 0;
 				PROXY_CC_CACHE.clear();
+				LML_IP_TEST_MEM = { at: 0, map: null };
 				cachedVipCountries = [];
 				lastVipCountriesFetch = 0;
 				CF_USAGE_CACHE = null;
@@ -2965,6 +3172,7 @@ const Router = {
 						const now = Date.now();
 						const cachedIpsData = (results || []).some(u=>u.auto_rotate_ip===1) ? await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null) : {};
 
+						const badIpsApi = await lmlGetBadIps(env);
 						const enrichedUsers = (results || []).map((user) => {
 							/* IP-FREE: آی‌پی‌های خود کاربر همیشه اول و ثابت است؛ چرخش فقط اضافه می‌کند */
 							const ownIpsList = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
@@ -2980,7 +3188,7 @@ const Router = {
 								return {
 								...user,
 								ips: finalIps,
-								ips_valid: lmlOnlyCfIps(mergedIps, 40),
+								ips_valid: lmlOnlyCfIps(mergedIps.filter(function (ip) { return !badIpsApi[ip]; }), 40),
 								ip_ssl_checked: true,
 								used_gb: (user.used_gb || 0) + ((GLOBAL_TRAFFIC_CACHE.get(user.username) || 0) / (1024 * 1024 * 1024)),
 								used_req: (user.used_req || 0) + (USER_REQ_CACHE.get(user.username) || 0),
@@ -3629,6 +3837,10 @@ rules:
 			if (rawIps.length) {
 				lmlCleanIps = lmlOnlyCfIps(rawIps, wantCount);
 			}
+		}
+		if (lmlCleanIps.length && env) {
+			const badIpsGt = await lmlGetBadIps(env);
+			lmlCleanIps = lmlCleanIps.filter(function (ip) { return !badIpsGt[ip]; });
 		}
 		const lmlIpFlag = coloHint ? (lmlFlagEmoji(lmlColoCountry(coloHint)) + " ") : "";
 		let ports = String(user.port || "443")
@@ -9132,9 +9344,10 @@ const HTML_TEMPLATES = {
 								<textarea class="input" id="fIps" placeholder="104.16.0.1" rows="4"></textarea>
 								<div class="lml-ip-actions">
 									<button type="button" class="btn btn-sm" id="btnFilterIps"><svg><use href="#i-filter"/></svg>مرتب‌سازی آی‌پی‌ها</button>
+									<button type="button" class="btn btn-sm" id="btnTestIps"><svg><use href="#i-activity"/></svg>تست آی‌پی تمیز</button>
 								</div>
 								<div class="lml-ip-status" id="sslTestStatus" style="display:none"></div>
-								<div class="note" style="margin-top:8px"><svg><use href="#i-info"/></svg><div>همه‌ی آی‌پی‌هایی که وارد کنید <b>بدون بررسی رنج</b> پذیرفته می‌شوند و هرگز خطا نمی‌دهند. کانفیگ مستقیم با آی‌پی شما ساخته می‌شود: <b>آی‌پی + TLS</b> (پورت 443 و… با SNI=دامنه و allowInsecure=1 ⇒ بدون خطای SSL/CCL)، <b>آی‌پی + بدون TLS</b> روی پورت‌های HTTP کلودفلر، و <b>دامنه + TLS</b>.</div></div>
+								<div class="note" style="margin-top:8px"><svg><use href="#i-info"/></svg><div>هر آی‌پی وارد کنید پذیرفته می‌شود (بدون بررسی رنج). برای اطمینان دکمهٔ <b>«تست آی‌پی تمیز»</b> را بزنید: ورکر با handshake واقعی TLS بررسی می‌کند که آی‌پی، لبه‌ی کلودفلر است و گواهی دامنهٔ شما را سرو می‌دهد. آی‌پی‌های مردود هم از این فیلد و هم از کانفیگ‌ها <b>خودکار حذف</b> می‌شوند ⇒ خطای SSL/CCL هرگز رخ نمی‌دهد. خانواده‌های لینک: <b>آی‌پی + TLS</b> (SNI=دامنه، allowInsecure=1)، <b>آی‌پی + بدون TLS</b> روی پورت HTTP، و <b>دامنه + TLS</b>.</div></div>
 							</div>
 							<div class="switch-row">
 								<div class="sr-text">
@@ -13895,7 +14108,54 @@ async function lmlFilterIpsNow() {
 	toast('✅ ' + uniq.length + ' آی‌پی پذیرفته و مرتب شد.', 'ok');
 }
 window.lmlFilterIpsNow = lmlFilterIpsNow;
-on($('btnFilterIps'), 'click', function () { lmlFilterIpsNow(); });/* Draws the outcome of an update check into every place it can be seen, so
+on($('btnFilterIps'), 'click', function () { lmlFilterIpsNow(); });
+
+/* ============================================================
+   تست آی‌پی تمیز — handshake واقعی TLS از ورکر (مثل رادار نوا)
+   آی‌پی‌های مردود از فیلد حذف و در DB نشان‌گذاری می‌شوند تا
+   خودکار از کانفیگ‌ها کنار بمانند ⇒ بدون خطای SSL/CCL
+   ============================================================ */
+async function lmlTestIpsNow() {
+	var st = $('sslTestStatus');
+	var raw = ($('fIps') && $('fIps').value) || '';
+	var ips = raw.replace(/[^0-9.]/g, ' ').split(' ').filter(function (x) {
+		return /^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}$/.test(x) && x.split('.').every(function (n) { return Number(n) <= 255; });
+	});
+	var uniq = [];
+	ips.forEach(function (x) { if (uniq.indexOf(x) < 0) uniq.push(x); });
+	if (!uniq.length) { toast('آی‌پی‌ای وارد نشده است.', 'warn'); return; }
+	var btn = $('btnTestIps');
+	if (btn) { btn.disabled = true; btn.textContent = 'در حال تست...'; }
+	if (st) { st.style.display = ''; st.textContent = '⏳ در حال تست ' + uniq.length + ' آی‌پی با handshake واقعی TLS از سمت ورکر...'; }
+	try {
+		var res = await api('/api/test-ips', { method: 'POST', body: { ips: uniq, port: 443 } });
+		var d = await res.json().catch(function () { return {}; });
+		if (!d || !Array.isArray(d.results)) throw new Error((d && d.error) || 'پاسخ نامعتبر از سرور');
+		var good = [], bad = [];
+		d.results.forEach(function (r) { if (r.ok) good.push(r.ip); else bad.push(r.ip); });
+		if ($('fIps')) $('fIps').value = good.join(String.fromCharCode(10));
+		if (st) {
+			st.style.display = '';
+			st.textContent = '';
+			d.results.forEach(function (r) {
+				var div = document.createElement('div');
+				div.style.cssText = 'padding:2px 0;direction:rtl;text-align:right';
+				div.textContent = (r.ok ? '✅ ' : '❌ ') + r.ip + ' — ' + r.reason + (r.ms ? ' (' + r.ms + 'ms)' : '');
+				st.appendChild(div);
+			});
+		}
+		if (good.length) toast('✅ ' + good.length + ' آی‌پی تمیز تأیید شد و در فیلد نگه داشته شد.', 'ok');
+		if (bad.length) toast('❌ ' + bad.length + ' آی‌پی تمیز نبود و حذف شد — این‌ها منبع خطای SSL بودند.', 'err', 9000);
+	} catch (e) {
+		if (st) { st.style.display = ''; st.textContent = 'تست ناموفق: ' + (e && e.message ? e.message : e); }
+		toast('❌ تست آی‌پی ناموفق بود: ' + (e && e.message ? e.message : 'خطای ارتباط با سرور'), 'err', 9000);
+	} finally {
+		var btn2 = $('btnTestIps');
+		if (btn2) { btn2.disabled = false; btn2.innerHTML = '<svg><use href="#i-activity"/></svg>تست آی‌پی تمیز'; }
+	}
+}
+on($('btnTestIps'), 'click', function () { lmlTestIpsNow(); });
+window.lmlTestIpsNow = lmlTestIpsNow;/* Draws the outcome of an update check into every place it can be seen, so
    the answer shows up wherever the button was pressed instead of only as a
    toast that disappears. */
 function renderUpdateState(info) {
