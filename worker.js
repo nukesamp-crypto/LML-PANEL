@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.2";
+const LML_PANEL_VERSION = "1.0.3";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -415,16 +415,24 @@ async function lmlFetchUrlText(urlStr, ms) {
 async function lmlGetRepoIps() {
 	try {
 		const now = Date.now();
-		if (LML_REPO_IPS_MEM.ips !== null && (now - LML_REPO_IPS_MEM.at) < 300000) return LML_REPO_IPS_MEM.ips;
+		if (LML_REPO_IPS_MEM.ips !== null && (now - LML_REPO_IPS_MEM.at) < 60000) return { ips: LML_REPO_IPS_MEM.ips, groups: (LML_REPO_IPS_MEM.groups || []) };
 		const txt = await lmlFetchUrlText(lmlRepoJsonUrl() + "?t=" + now, 6000);
 		let ips = [];
+		let groups = [];
 		try {
 			const j = JSON.parse(txt);
-			if (j && j.enabled !== false && Array.isArray(j.ips)) ips = lmlOnlyCfIps(j.ips.map(function (x) { return String(x || "").trim(); }), 60);
+			if (j && j.enabled !== false) {
+				if (Array.isArray(j.ips)) ips = lmlOnlyCfIps(j.ips.map(function (x) { return String(x || "").trim(); }), 60);
+				if (Array.isArray(j.groups)) {
+					groups = j.groups.filter(function (g) { return g && g.name && Array.isArray(g.ips); }).map(function (g) {
+						return { name: String(g.name).slice(0, 60), ips: lmlOnlyCfIps(g.ips.map(function (x) { return String(x || "").trim(); }), 60) };
+					});
+				}
+			}
 		} catch (e) { }
-		LML_REPO_IPS_MEM = { at: now, ips: ips };
-		return ips;
-	} catch (e) { return (LML_REPO_IPS_MEM.ips || []); }
+		LML_REPO_IPS_MEM = { at: now, ips: ips, groups: groups };
+		return { ips: ips, groups: groups };
+	} catch (e) { return { ips: (LML_REPO_IPS_MEM.ips || []), groups: (LML_REPO_IPS_MEM.groups || []) }; }
 }
 async function lmlGetExtIps(env) {
 	try {
@@ -441,6 +449,106 @@ async function lmlGetExtIps(env) {
 		LML_EXT_IPS_MEM = { at: now, url: srcUrl, ips: ips };
 		return ips;
 	} catch (e) { return (LML_EXT_IPS_MEM.ips || []); }
+}
+
+/* ============================================================
+   LML GLOBAL SOURCES — منابع جهانی آی‌پی تمیز و ساکس پروکسی
+   فهرست‌های بزرگ و زندهٔ گیت‌هاب؛ اعتبارسنجی خودکار؛ کش حافظه‌ای؛
+   هرگز خطا نمی‌دهد.
+   ============================================================ */
+const LML_GLOBAL_IP_SOURCES = [
+	"https://raw.githubusercontent.com/arista-project/cf-clean-ips/main/ip.txt",
+	"https://raw.githubusercontent.com/vfarid/cf-clean-ips/main/list.txt"
+];
+const LML_SOCKS_SOURCES = [
+	"https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
+	"https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks5.txt"
+];
+let LML_GLOBAL_IPS_MEM = { at: 0, ips: null };
+let LML_SOCKS_MEM = { at: 0, list: null, alive: null };
+async function lmlGetGlobalRepoIps() {
+	try {
+		const now = Date.now();
+		if (LML_GLOBAL_IPS_MEM.ips !== null && (now - LML_GLOBAL_IPS_MEM.at) < 21600000) return LML_GLOBAL_IPS_MEM.ips;
+		try { await lmlCfRangesRefresh(); } catch (e) { }
+		const out = [];
+		const seen = {};
+		for (const srcUrl of LML_GLOBAL_IP_SOURCES) {
+			const txt = await lmlFetchUrlText(srcUrl, 6000);
+			const found = String(txt).match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g) || [];
+			for (const f of found) {
+				if (seen[f]) continue;
+				seen[f] = 1;
+				if (lmlIpInCf(f) && out.length < 60) out.push(f);
+			}
+			if (out.length >= 60) break;
+		}
+		LML_GLOBAL_IPS_MEM = { at: now, ips: out };
+		return out;
+	} catch (e) { return (LML_GLOBAL_IPS_MEM.ips || []); }
+}
+/* تست زندهٔ SOCKS5: handshake واقعی (greeting 05 01 00 -> 05 00) */
+async function lmlSocksAlive(hostport, timeoutMs) {
+	const t0 = Date.now();
+	let sock = null;
+	let timer = null;
+	try {
+		const parts = String(hostport).split(":");
+		const port = Number(parts[parts.length - 1]);
+		const host = parts.slice(0, -1).join(":");
+		if (!host || !port) return null;
+		sock = connect({ hostname: host, port: port });
+		const writer = sock.writable.getWriter();
+		const reader = sock.readable.getReader();
+		const ok = await Promise.race([
+			(async function () {
+				try {
+					await writer.write(new Uint8Array([0x05, 0x01, 0x00]));
+					const res = await reader.read();
+					const v = res && res.value;
+					return !!(v && v.length >= 2 && v[0] === 0x05 && v[1] === 0x00);
+				} catch (e) { return false; }
+			})(),
+			new Promise(function (resolve) {
+				timer = setTimeout(function () { try { sock.close(); } catch (e) { } resolve(false); }, timeoutMs || 2200);
+			})
+		]);
+		if (timer) clearTimeout(timer);
+		return ok ? { hp: host + ":" + port, ms: Date.now() - t0 } : null;
+	} catch (e) {
+		if (timer) clearTimeout(timer);
+		return null;
+	} finally { try { if (sock) sock.close(); } catch (e) { } }
+}
+async function lmlGetSocksRepo() {
+	try {
+		const now = Date.now();
+		if (LML_SOCKS_MEM.alive && (now - LML_SOCKS_MEM.at) < 600000) return { success: true, proxies: LML_SOCKS_MEM.alive, cached: true };
+		let cands = LML_SOCKS_MEM.list;
+		if (!cands || (now - LML_SOCKS_MEM.at) >= 600000) {
+			cands = [];
+			const seen = {};
+			for (const srcUrl of LML_SOCKS_SOURCES) {
+				const txt = await lmlFetchUrlText(srcUrl, 6000);
+				const found = String(txt).split(/\r?\n/).map(function (x) { return x.trim(); }).filter(function (x) { return /^\d{1,3}(\.\d{1,3}){3}:\d{2,5}$/.test(x); });
+				for (const f of found) { if (!seen[f] && cands.length < 120) { seen[f] = 1; cands.push(f); } }
+				if (cands.length >= 120) break;
+			}
+		}
+		const test = cands.slice(0, 48);
+		const alive = [];
+		for (let i = 0; i < test.length; i += 12) {
+			const rs = await Promise.all(test.slice(i, i + 12).map(function (hp) { return lmlSocksAlive(hp, 2200); }));
+			rs.forEach(function (r) { if (r) alive.push(r); });
+			if (alive.length >= 24) break;
+		}
+		alive.sort(function (a, b) { return a.ms - b.ms; });
+		const out = alive.slice(0, 24);
+		LML_SOCKS_MEM = { at: now, list: cands, alive: out };
+		return { success: true, proxies: out, cached: false, tested: test.length };
+	} catch (e) {
+		return { success: false, proxies: (LML_SOCKS_MEM.alive || []) };
+	}
 }
 
 /* دامنه‌ی واقعی پنل: هرگز آی‌پی نمی‌شود (منبع خطای SSL در مرورگر همین بود) */
@@ -2158,11 +2266,12 @@ const Router = {
 			try {
 				const session = await DbService.getSession(request, env);
 				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const repoIps = await lmlGetRepoIps();
+				const repoData = await lmlGetRepoIps();
 				const extIps = await lmlGetExtIps(env);
+				const globalIps = await lmlGetGlobalRepoIps();
 				let extSet = false;
 				try { const r2 = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ext_ip_source'").first(); extSet = !!(r2 && r2.value && String(r2.value).trim()); } catch (e) { }
-				return new Response(JSON.stringify({ success: true, repo: repoIps, ext: extIps, ext_set: extSet }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+				return new Response(JSON.stringify({ success: true, repo: repoData.ips, groups: repoData.groups, global: globalIps, ext: extIps, ext_set: extSet }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 			} catch (e) {
 				return new Response(JSON.stringify({ success: false, repo: [], ext: [], ext_set: false }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
 			}
@@ -2187,10 +2296,27 @@ const Router = {
 				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
 			}
 		}
-		if (url.pathname === "/api/ip-pool" && request.method === "GET") {
+		if (url.pathname === "/api/socks-repo" && request.method === "GET") {
 			try {
 				const session = await DbService.getSession(request, env);
-				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				if (!session) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				const socksData = await lmlGetSocksRepo();
+				return new Response(JSON.stringify(socksData), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+			} catch (e) {
+				return new Response(JSON.stringify({ success: false, proxies: [] }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
+			}
+		}
+		if (url.pathname === "/api/ip-pool" && (request.method === "GET" || request.method === "POST")) {
+			try {
+				const session = await DbService.getSession(request, env);
+				if (!session) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				if (request.method === "POST") {
+					const bodyP = await readJsonBody(request);
+					const listP = (Array.isArray(bodyP && bodyP.ips) ? bodyP.ips : []).map(function (x) { return String(x || "").trim(); }).filter(function (x) { return /^\d{1,3}(\.\d{1,3}){3}$/.test(x); }).slice(0, 40);
+					if (listP.length) await lmlSaveIpTestResults(listP.map(function (ip) { return { ip: ip, ok: 1, ms: null, reason: "", cc: "" }; }), env);
+					return new Response(JSON.stringify({ success: true, added: listP.length }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
+				}
+				if (!session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
 				let cacheJ = {};
 				try {
 					const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ip_test_cache'").first();
@@ -2954,6 +3080,8 @@ const Router = {
 				PROXY_CC_CACHE.clear();
 				LML_REPO_IPS_MEM = { at: 0, ips: null };
 				LML_EXT_IPS_MEM = { at: 0, url: "", ips: null };
+				LML_GLOBAL_IPS_MEM = { at: 0, ips: null };
+				LML_SOCKS_MEM = { at: 0, list: null, alive: null };
 				LML_IP_TEST_MEM = { at: 0, bad: null, cc: null };
 				cachedVipCountries = [];
 				lastVipCountriesFetch = 0;
@@ -3392,11 +3520,17 @@ const Router = {
 							};
 						});
 						let cfReqs = { today: 0, total: 0, d1Reads: 0, d1Writes: 0 };
+						let batchRows = [];
 						try {
 							const liveCf = await getCfUsage(env);
 							const todayStr = new Date().toISOString().split("T")[0];
-							const dateRow = await env.DB.prepare("SELECT value FROM settings WHERE key = 'req_last_date'").first();
-							const totalRow = await env.DB.prepare("SELECT value FROM settings WHERE key = 'req_total'").first();
+							batchRows = await env.DB.batch([
+								env.DB.prepare("SELECT value FROM settings WHERE key = 'req_last_date'"),
+								env.DB.prepare("SELECT value FROM settings WHERE key = 'req_total'"),
+								env.DB.prepare("SELECT value FROM settings WHERE key = 'deleted_users_gb'")
+							]);
+							const dateRow = batchRows[0];
+							const totalRow = batchRows[1];
 							let dbTotal = totalRow ? parseInt(totalRow.value) || 0 : 0;
 							let dbToday = 0;
 							if (dateRow && dateRow.value === todayStr) {
@@ -3412,7 +3546,7 @@ const Router = {
 						} catch (e) { }
 						let deletedGb = 0;
 						try {
-							const delRow = await env.DB.prepare("SELECT value FROM settings WHERE key = 'deleted_users_gb'").first();
+							const delRow = batchRows[2];
 							if (delRow) deletedGb = parseFloat(delRow.value) || 0;
 						} catch (e) {}
 						return new Response(
@@ -9548,6 +9682,7 @@ const HTML_TEMPLATES = {
 								<div class="lml-ip-actions">
 									<button type="button" class="btn btn-sm" id="btnFilterIps"><svg><use href="#i-filter"/></svg>مرتب‌سازی آی‌پی‌ها</button>
 									<button type="button" class="btn btn-sm" id="btnTestIps"><svg><use href="#i-activity"/></svg>تست آی‌پی تمیز</button>
+									<button type="button" class="btn btn-sm" id="btnOpenLmlRepo"><svg><use href="#i-globe"/></svg>مخزن آی‌پی تمیز</button>
 								</div>
 								<div class="lml-ip-status" id="sslTestStatus" style="display:none"></div>
 								<div class="note" style="margin-top:8px"><svg><use href="#i-info"/></svg><div>هر آی‌پی وارد کنید پذیرفته می‌شود (بدون بررسی رنج). برای اطمینان دکمهٔ <b>«تست آی‌پی تمیز»</b> را بزنید: ورکر با handshake واقعی TLS بررسی می‌کند که آی‌پی، لبه‌ی کلودفلر است و گواهی دامنهٔ شما را سرو می‌دهد. آی‌پی‌های مردود هم از این فیلد و هم از کانفیگ‌ها <b>خودکار حذف</b> می‌شوند ⇒ خطای SSL/CCL هرگز رخ نمی‌دهد. خانواده‌های لینک: <b>آی‌پی + TLS</b> (SNI=دامنه، allowInsecure=1)، <b>آی‌پی + بدون TLS</b> روی پورت HTTP، و <b>دامنه + TLS</b>.</div></div>
@@ -9636,6 +9771,7 @@ const HTML_TEMPLATES = {
 								<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
 									<button type="button" class="btn" id="btnTestProxies"><svg><use href="#i-activity"/></svg>تست پروکسی‌ها</button>
 									<button type="button" class="btn btn-primary" id="btnPublicProxy"><svg><use href="#i-globe"/></svg>اسکن پروکسی عمومی</button>
+									<button type="button" class="btn" id="btnSocksRepo"><svg><use href="#i-bolt"/></svg>مخزن ساکس پروکسی (زنده)</button>
 								</div>
 								<div class="switch-row" style="margin-top:12px">
 									<div class="sr-text">
@@ -9935,22 +10071,30 @@ const HTML_TEMPLATES = {
 <h4>۱. دریافت و اجرا</h4><p>روی ویندوز Python 3.9 یا جدیدتر، و روی اندروید Pydroid نصب کنید. فایل را دانلود و اجرا کنید؛ رابط در مرورگر باز می‌شود. اگر خودکار باز نشد، آدرس چاپ‌شده در ترمینال را باز کنید.</p><a class="btn btn-primary" href="/lml-scanner/download" download>دانلود موتور مستقل</a><pre dir="ltr">python LML-Scanner.py</pre>
 <h4>۲. تست دامنهٔ خودتان</h4><p>دامنه همین پنل را در اسکنر وارد کنید. فایل Worker جدید باید قبلاً مستقر شده باشد. پس از اسکن، «خروجی JSON برای پنل» بگیرید.</p>
 <h4>۳. ورود و اعمال نتایج</h4><input class="input" type="file" id="lmlScanFile" accept=".json,application/json"><label>حداکثر آی‌پی قابل اعمال<input class="input" id="ipCount" type="number" min="1" max="100" value="10"></label><p id="lmlImportSummary">فایلی انتخاب نشده است.</p><div id="ipLoading" class="scan-log hidden"></div><p>نتایج مربوط به اینترنتِ زمان تست هستند. هنگام اعمال، چرخش تصادفی خاموش می‌شود. سپس فرم کاربر را ذخیره کنید. برای تست مجدد همان آی‌پی‌ها، آن‌ها را در بخش دلخواه اسکنر وارد کنید.</p>
-<h4>📦 مخزن آی‌پی LML (رسمی — زنده)</h4>
-<p id="lmlGhRepoInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت مخزن LML...</p>
-<div id="lmlGhRepoList" class="scan-log" style="max-height:150px;overflow:auto"></div>
+</div><div class="modal-foot"><button class="btn" data-close-modal="modalIps">بستن</button><button class="btn btn-primary" id="btnApplyIps" disabled>اعمال بهترین‌ها در فرم کاربر</button></div></div></div>
+<div class="modal" id="modalIpRepo"><div class="modal-card"><div class="modal-head"><div class="mh-icon" style="background:var(--accent-soft);color:var(--accent)"><svg><use href="#i-globe"/></svg></div><div class="mh-text"><h3 class="modal-title">مخزن آی‌پی تمیز</h3><p class="modal-sub">رسمی LML • منابع جهانی • تأییدشده‌های ایران — زنده</p></div><button type="button" class="icon-btn" data-close-modal="modalIpRepo"><svg><use href="#i-x"/></svg></button></div><div class="modal-body">
+<h4>📦 مخزن رسمی LML (زنده — دسته‌بندی‌شده)</h4>
+<p id="lmlGhRepoInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت...</p>
+<div id="lmlGhRepoList" class="scan-log" style="max-height:200px;overflow:auto"></div>
+<h4 style="margin-top:12px">🌍 منابع جهانی (کلودفلر — اعتبارسنجی خودکار)</h4>
+<p id="lmlGlobalInfo" style="font-size:12px;color:var(--text-3)"></p>
+<div id="lmlGlobalList" class="scan-log" style="max-height:130px;overflow:auto"></div>
 <h4 style="margin-top:12px">🔗 منبع زندهٔ خارجی (لینک اشتراک دلخواه)</h4>
 <div style="display:flex;gap:8px;margin:6px 0">
 <input class="input" id="lmlExtSourceInput" dir="ltr" placeholder="https://example.com/sub?token=..." style="flex:1;font-size:11.5px">
 <button type="button" class="btn btn-sm" id="btnSaveExtSource">ذخیرهٔ منبع</button>
 </div>
-<p id="lmlExtSourceStatus" style="font-size:11.5px;color:var(--text-3)">منبعی تنظیم نشده — لینک اشتراک هر سرویسی را اینجا ذخیره کنید تا آی‌پی‌هایش زنده و خودکار به مخزن LML اضافه شود.</p>
-<div id="lmlExtRepoList" class="scan-log" style="max-height:150px;overflow:auto"></div>
-<h4 style="margin-top:14px">🏆 آی‌پی‌های تأییدشده (تست خودکار از سراسر ایران)</h4>
-<p id="lmlPoolInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت...</p>
+<p id="lmlExtSourceStatus" style="font-size:11.5px;color:var(--text-3)">منبعی تنظیم نشده — لینک اشتراک هر سرویسی را ذخیره کنید تا آی‌پی‌هایش زنده به مخزن اضافه شود.</p>
+<div id="lmlExtRepoList" class="scan-log" style="max-height:120px;overflow:auto"></div>
+<h4 style="margin-top:12px">🏆 مخزن آی‌پی تمیز کلودفلر (پرشوندهٔ خودکار از تست‌های سراسر ایران)</h4>
+<p id="lmlPoolInfo" style="font-size:12px;color:var(--text-3)"></p>
 <div id="lmlPoolList" class="scan-log" style="max-height:150px;overflow:auto"></div>
-<button type="button" class="btn btn-primary" id="btnGhRepoAdd" disabled style="margin-top:10px">افزودن انتخاب‌شده‌ها به آی‌پی‌های کاربر</button>
-<p style="font-size:11.5px;color:var(--text-3)">مخزن رسمی LML به‌صورت <b>زنده</b> به‌روز می‌شود (حداکثر ۱ دقیقه، بدون دیپلوی). آی‌پی‌های تأییدشده به‌صورت خودکار از تست‌های واقعی از نقاط مختلف ایران جمع‌آوری می‌شوند — فقط نتیجهٔ نهایی و پرچم کشور نمایش داده می‌شود، بدون هیچ جزئیاتی. افزودن به فرم کاربر فقط دستی و با کلیک شما انجام می‌شود.</p>
-</div><div class="modal-foot"><button class="btn" data-close-modal="modalIps">بستن</button><button class="btn btn-primary" id="btnApplyIps" disabled>اعمال بهترین‌ها در فرم کاربر</button></div></div></div>
+<p style="font-size:11px;color:var(--text-3);line-height:1.9">هر آی‌پی که در پنل تست شود یا از اسکنر مستقل (تست روی اینترنت واقعی ایران) وارد شود، <b>درجا و خودکار</b> به مخزن آی‌پی تمیز کلودفلر فرستاده می‌شود — بدون نمایش هیچ جزئیاتی، فقط پرچم کشور. افزودن به فرم کاربر فقط دستی است.</p>
+</div><div class="modal-foot"><button class="btn" data-close-modal="modalIpRepo">بستن</button><button class="btn btn-primary" id="btnGhRepoAdd" disabled>افزودن انتخاب‌شده‌ها به آی‌پی‌های کاربر</button></div></div></div>
+<div class="modal narrow" id="modalSocksRepo"><div class="modal-card"><div class="modal-head"><div class="mh-icon" style="background:var(--accent-soft);color:var(--accent)"><svg><use href="#i-bolt"/></svg></div><div class="mh-text"><h3 class="modal-title">مخزن ساکس پروکسی جهانی</h3><p class="modal-sub">تست زندهٔ handshake از بزرگ‌ترین منابع دنیا — سریع‌ترین‌ها اول</p></div><button type="button" class="icon-btn" data-close-modal="modalSocksRepo"><svg><use href="#i-x"/></svg></button></div><div class="modal-body">
+<p id="socksRepoInfo" style="font-size:12px;color:var(--text-3)">روی «یافتن پروکسی‌های سریع» بزنید — تست زنده از منابع جهانی (تا ~۲۰ ثانیه).</p>
+<div id="socksRepoList" class="scan-log" style="max-height:300px;overflow:auto"></div>
+</div><div class="modal-foot"><button class="btn" data-close-modal="modalSocksRepo">بستن</button><button class="btn btn-primary" id="btnSocksRefresh"><svg><use href="#i-search"/></svg>یافتن پروکسی‌های سریع</button></div></div></div>
 <div class="modal narrow" id="lmlReleaseModal"><div class="modal-card"><div class="modal-head"><h3 class="modal-title">تازه‌های LML</h3><button class="icon-btn" data-close-modal="lmlReleaseModal">×</button></div><div class="modal-body"><h4 id="lmlReleaseVersion"></h4><ul id="lmlReleaseNotes"></ul><p>این اعلان با انتشار Worker جدید روی دامنهٔ خودتان به‌روز می‌شود. هیچ سورسی از سرور شخص ثالث نصب نمی‌شود.</p></div><div class="modal-foot"><button class="btn btn-primary" id="lmlReleaseSeen">متوجه شدم</button><button class="btn" id="lmlReleaseRefresh">بارگذاری نسخهٔ منتشرشده</button></div></div></div>
 
 <!-- ==================== PUBLIC PROXY SCANNER MODAL ==================== -->
@@ -10097,7 +10241,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.2';
+var CURRENT_VERSION = '1.0.3';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -12386,7 +12530,6 @@ async function openIpRepoModal() {
 	var log = $('ipLoading');
 	if (log) { log.textContent = ''; log.classList.add('hidden'); }
 	vset('ipCount', vval('fIpCount') || '20');
-	lmlLoadGhRepo();
 }
 window.openIpSelectorModal = openIpRepoModal;
 
@@ -12417,6 +12560,7 @@ async function applySelectedIps() {
     var count=Math.min(100,Math.max(1,parseInt(vval('ipCount'),10)||10));
     var ips=lmlImportedScan.results.slice(0,count).map(function(r){return r.ip;});
     vset('fIps',ips.join('\\n'));vchk('fAutoRotateIp',false);vset('fAutoRotate','0');vset('fIpCount',String(ips.length));$$('input[name="ports"]').forEach(function(c){c.checked=c.value===String(lmlImportedScan.port);});vset('fCustomPorts','');
+    try { api('/api/ip-pool', { method: 'POST', body: { ips: ips } }).then(function () { }).catch(function () { }); } catch (e0) { }
     closeModal('modalIps');openModal('modalUser');
     toast('نتایج در فرم کاربر درج شد؛ مشخصات را بررسی و ذخیره کنید.', 'success');
 }
@@ -12426,6 +12570,7 @@ on($('btnApplyIps'), 'click', applySelectedIps);
 on($('btnOpenIpRepo'), 'click', openIpRepoModal);
 on($('btnOpenIpRepo2'), 'click', openIpRepoModal);
 on($('btnOpenIpRepo3'), 'click', openIpRepoModal);
+on($('btnOpenLmlRepo'), 'click', function () { openModal('modalIpRepo'); lmlLoadGhRepo(); });
 
 /* ============================================================
    مخزن آی‌پی گیت‌هاب (live-ips.json) — فقط افزودن دستی توسط مدیر
@@ -12435,7 +12580,7 @@ async function lmlLoadGhRepo() {
 	var info = $('lmlGhRepoInfo'), box = $('lmlGhRepoList'), btn = $('btnGhRepoAdd');
 	if (!info || !box || !btn) return;
 	function repoRow(ip) {
-		return '<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer"><input type="checkbox" class="lml-gh-ip" value="' + attr(ip) + '" checked><span class="mono" dir="ltr">' + esc(ip) + '</span></label>';
+		return '<label style="display:flex;align-items:center;gap:8px;padding:3px 2px;cursor:pointer"><input type="checkbox" class="lml-gh-ip" value="' + attr(ip) + '" checked><span class="mono" dir="ltr">' + esc(ip) + '</span></label>';
 	}
 	var total = 0;
 	try {
@@ -12443,22 +12588,37 @@ async function lmlLoadGhRepo() {
 		var res = await api('/api/ip-repo');
 		var d = await res.json().catch(function () { return {}; });
 		var repo = (d && Array.isArray(d.repo)) ? d.repo : [];
+		var groups = (d && Array.isArray(d.groups)) ? d.groups : [];
+		var glob = (d && Array.isArray(d.global)) ? d.global : [];
 		var ext = (d && Array.isArray(d.ext)) ? d.ext : [];
-		if (!repo.length) {
-			info.textContent = 'مخزن رسمی LML خالی است — فایل live-ips.json را در مخزن رسمی ویرایش کنید تا زنده اینجا ظاهر شود.';
-			box.innerHTML = '';
-		} else {
+		if (groups.length) {
+			info.textContent = 'مخزن رسمی LML — دسته‌بندی‌شده (زنده):';
+			box.innerHTML = groups.map(function (g) {
+				return '<div style="font-weight:800;font-size:11.5px;margin:7px 0 2px;color:var(--accent-text)">' + esc(g.name) + ' (' + g.ips.length + ')</div>' + g.ips.map(repoRow).join('');
+			}).join('');
+			total += groups.reduce(function (acc, g) { return acc + g.ips.length; }, 0);
+		} else if (repo.length) {
 			info.textContent = repo.length + ' آی‌پی در مخزن رسمی LML (زنده):';
 			box.innerHTML = repo.map(repoRow).join('');
+			total += repo.length;
+		} else {
+			info.textContent = 'مخزن رسمی LML خالی است — فایل live-ips.json را در مخزن رسمی ویرایش کنید.';
+			box.innerHTML = '';
+		}
+		var ginfo = $('lmlGlobalInfo'), gbox = $('lmlGlobalList');
+		if (gbox) {
+			if (!glob.length) { if (ginfo) ginfo.textContent = 'منابع جهانی فعلاً در دسترس نیستند.'; gbox.innerHTML = ''; }
+			else { if (ginfo) ginfo.textContent = glob.length + ' آی‌پی از منابع بزرگ جهانی (فقط رنج رسمی کلودفلر، اعتبارسنجی خودکار):'; gbox.innerHTML = glob.map(repoRow).join(''); total += glob.length; }
 		}
 		var ebox = $('lmlExtRepoList'), einfo = $('lmlExtSourceStatus'), einp = $('lmlExtSourceInput');
 		if (ebox) {
 			if (!ext.length) {
-				if (einfo) einfo.textContent = (d && d.ext_set) ? 'منبع ذخیره شده ولی هنوز آی‌پی‌ای از آن استخراج نشده (کش تا ۱۰ دقیقه یا منبع فعلاً آی‌پی ندارد).' : 'منبعی تنظیم نشده — لینک اشتراک هر سرویسی را اینجا ذخیره کنید تا آی‌پی‌هایش زنده و خودکار به مخزن LML اضافه شود.';
+				if (einfo) einfo.textContent = (d && d.ext_set) ? 'منبع ذخیره شده ولی هنوز آی‌پی‌ای استخراج نشده (کش تا ۱۰ دقیقه).' : 'منبعی تنظیم نشده — لینک اشتراک هر سرویسی را ذخیره کنید تا آی‌پی‌هایش زنده به مخزن اضافه شود.';
 				ebox.innerHTML = '';
 			} else {
-				if (einfo) einfo.textContent = ext.length + ' آی‌پی زنده از منبع خارجی استخراج شد:';
+				if (einfo) einfo.textContent = ext.length + ' آی‌پی زنده از منبع خارجی:';
 				ebox.innerHTML = ext.map(repoRow).join('');
+				total += ext.length;
 			}
 		}
 		try {
@@ -12466,7 +12626,6 @@ async function lmlLoadGhRepo() {
 			var sd = await sr.json().catch(function () { return {}; });
 			if (einp && sd && sd.url) einp.value = sd.url;
 		} catch (e3) { }
-		total = repo.length + ext.length;
 	} catch (e) {
 		info.textContent = 'دریافت مخزن ناموفق بود: ' + (e && e.message ? e.message : e);
 		box.innerHTML = '';
@@ -12480,12 +12639,12 @@ async function lmlLoadGhRepo() {
 		poolCount = plist.length;
 		if (pbox) {
 			if (!plist.length) {
-				if (pinfo) pinfo.textContent = 'هنوز آی‌پی تأییدشده‌ای نیست — با تست شدن آی‌پی‌ها (خودکار هنگام ذخیره کاربر یا دکمهٔ تست) اینجا پر می‌شود.';
+				if (pinfo) pinfo.textContent = 'هنوز آی‌پی تأییدشده‌ای نیست — با تست شدن آی‌پی‌ها از سراسر ایران، خودکار و درجا اینجا پر می‌شود.';
 				pbox.innerHTML = '';
 			} else {
-				if (pinfo) pinfo.textContent = plist.length + ' آی‌پی تأییدشده با تست واقعی TLS (پرچم = کشور ثبت‌شدهٔ آی‌پی):';
+				if (pinfo) pinfo.textContent = plist.length + ' آی‌پی تأییدشده با تست واقعی (پرچم = کشور ثبت‌شده):';
 				pbox.innerHTML = plist.map(function (it) {
-					return '<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer"><input type="checkbox" class="lml-pool-ip" value="' + attr(it.ip) + '"><span>' + (it.cc ? flagText(it.cc) + ' ' : '✅ ') + '</span><span class="mono" dir="ltr">' + esc(it.ip) + '</span></label>';
+					return '<label style="display:flex;align-items:center;gap:8px;padding:3px 2px;cursor:pointer"><input type="checkbox" class="lml-pool-ip" value="' + attr(it.ip) + '"><span>' + (it.cc ? flagText(it.cc) + ' ' : '✅ ') + '</span><span class="mono" dir="ltr">' + esc(it.ip) + '</span></label>';
 				}).join('');
 			}
 		}
@@ -12537,6 +12696,62 @@ function lmlAddGhRepoIps() {
 on($('btnGhRepoAdd'), 'click', lmlAddGhRepoIps);
 window.lmlLoadGhRepo = lmlLoadGhRepo;
 window.lmlAddGhRepoIps = lmlAddGhRepoIps;
+
+/* ============================================================
+   مخزن ساکس پروکسی جهانی — تست زندهٔ handshake، سریع‌ترین اول
+   ============================================================ */
+async function lmlLoadSocksRepo() {
+	var info = $('socksRepoInfo'), box = $('socksRepoList'), btn = $('btnSocksRefresh');
+	if (btn) btn.disabled = true;
+	if (info) info.textContent = '⏳ در حال دریافت از منابع بزرگ جهانی و تست زندهٔ handshake (تا ~۲۰ ثانیه)...';
+	if (box) box.innerHTML = '';
+	try {
+		var res = await api('/api/socks-repo');
+		var d = await res.json().catch(function () { return {}; });
+		var list = (d && Array.isArray(d.proxies)) ? d.proxies : [];
+		if (!list.length) {
+			if (info) info.textContent = 'فعلاً پروکسی زنده‌ای پیدا نشد؛ دوباره تلاش کنید.';
+			return;
+		}
+		if (info) info.textContent = list.length + ' ساکس پروکسی زنده (تست handshake واقعی) — مرتب بر اساس سرعت' + (d.cached ? ' — کش' : '') + ':';
+		box.innerHTML = list.map(function (p) {
+			return '<div style="display:flex;align-items:center;gap:8px;padding:5px 2px;border-bottom:1px solid var(--border)">' +
+				'<span class="mono" dir="ltr" style="flex:1">socks5://' + esc(p.hp) + '</span>' +
+				'<span style="font-size:11px;font-weight:700;color:' + (p.ms < 700 ? 'var(--ok)' : 'var(--text-3)') + '">' + p.ms + 'ms</span>' +
+				'<button type="button" class="btn btn-sm" data-socks-add="' + attr(p.hp) + '">افزودن به فرم</button>' +
+				'</div>';
+		}).join('');
+	} catch (e) {
+		if (info) info.textContent = 'خطا: ' + (e && e.message ? e.message : e);
+	} finally {
+		var b2 = $('btnSocksRefresh');
+		if (b2) b2.disabled = false;
+	}
+}
+on($('btnSocksRefresh'), 'click', lmlLoadSocksRepo);
+on($('btnSocksRepo'), 'click', function () {
+	openModal('modalSocksRepo');
+	var b = $('socksRepoList');
+	if (b && !b.innerHTML) lmlLoadSocksRepo();
+});
+on($('socksRepoList'), 'click', function (e) {
+	var t = e.target.closest ? e.target.closest('[data-socks-add]') : null;
+	if (!t) return;
+	var val = 'socks5://' + t.getAttribute('data-socks-add');
+	var idx = -1;
+	for (var i = 0; i < State.proxyFields.length; i++) {
+		if (!String(State.proxyFields[i] || '').trim()) { idx = i; break; }
+	}
+	if (idx < 0) { State.proxyFields.push(''); idx = State.proxyFields.length - 1; }
+	State.proxyFields[idx] = val;
+	State.activeProxyIndex = idx;
+	renderProxyFieldsUI();
+	var pm = $('fProxyMode');
+	if (pm && !pm.checked) { pm.checked = true; try { toggleUserProxyMode(true); } catch (e2) { } }
+	closeModal('modalSocksRepo');
+	toast('✅ ' + val + ' به فیلد پروکسی اضافه شد — کاربر را ذخیره کنید.', 'ok');
+});
+window.lmlLoadSocksRepo = lmlLoadSocksRepo;
 
 /* VIP proxy cache (used to highlight known-good proxy links) */
 async function initVipCache() {
