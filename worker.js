@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.4";
+const LML_PANEL_VERSION = "1.0.0";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -316,6 +316,25 @@ async function lmlGeoCountry(ip) {
 		return (j && j.countryCode) ? String(j.countryCode).toUpperCase() : "";
 	} catch (e) { return ""; }
 }
+/* جئوی دسته‌ای (یک درخواست برای همه) — برای پرچم کشور ساکس‌ها */
+async function lmlGeoBatch(ipsArr) {
+	const out = {};
+	try {
+		for (let i = 0; i < ipsArr.length; i += 90) {
+			const chunk = ipsArr.slice(i, i + 90).map(function (x) { return { query: x, fields: "query,countryCode" }; });
+			const ctl = new AbortController();
+			const t = setTimeout(function () { try { ctl.abort(); } catch (e) { } }, 4000);
+			try {
+				const r = await fetch("http://ip-api.com/batch", { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" }, body: JSON.stringify(chunk), signal: ctl.signal });
+				clearTimeout(t);
+				if (!r.ok) continue;
+				const j = await r.json();
+				(Array.isArray(j) ? j : []).forEach(function (e) { if (e && e.query && e.countryCode) out[e.query] = String(e.countryCode).toUpperCase(); });
+			} catch (e) { clearTimeout(t); }
+		}
+	} catch (e) { }
+	return out;
+}
 async function lmlSaveIpTestResults(results, env) {
 	try {
 		const nowT = Date.now();
@@ -469,7 +488,7 @@ let LML_SOCKS_MEM = { at: 0, srcAt: 0, list: null, alive: null };
 async function lmlGetGlobalRepoIps() {
 	try {
 		const now = Date.now();
-		if (LML_GLOBAL_IPS_MEM.ips !== null && (now - LML_GLOBAL_IPS_MEM.at) < 1800000) return LML_GLOBAL_IPS_MEM.ips;
+		if (LML_GLOBAL_IPS_MEM.ips !== null && (now - LML_GLOBAL_IPS_MEM.at) < 60000) return LML_GLOBAL_IPS_MEM.ips;
 		try { await lmlCfRangesRefresh(); } catch (e) { }
 		const out = [];
 		const seen = {};
@@ -566,19 +585,24 @@ async function lmlGetSocksRepo(force) {
 				const j = Math.floor(Math.random() * (s + 1));
 				const tmp = shuffled[s]; shuffled[s] = shuffled[j]; shuffled[j] = tmp;
 			}
-			const test = shuffled.filter(function (hp) { return !triedHp[hp]; }).slice(0, 60);
+			const test = shuffled.filter(function (hp) { return !triedHp[hp]; }).slice(0, 80);
 			if (!test.length) break;
 			test.forEach(function (hp) { triedHp[hp] = 1; });
 			testedCount += test.length;
-			for (let i = 0; i < test.length; i += 15) {
-				const rs = await Promise.all(test.slice(i, i + 15).map(function (hp) { return lmlSocksAlive(hp, 2000); }));
+			for (let i = 0; i < test.length; i += 20) {
+				const rs = await Promise.all(test.slice(i, i + 20).map(function (hp) { return lmlSocksAlive(hp, 1800); }));
 				rs.forEach(function (r) { if (r) alive.push(r); });
 				if (alive.length >= 20) break;
 			}
 			if (alive.length >= 20) break;
 		}
 		alive.sort(function (a, b) { return a.ms - b.ms; });
-		const out = alive.slice(0, 24);
+		const out = alive.slice(0, 30);
+		/* پرچم کشور هر پروکسی — یک درخواست دسته‌ای، بهترین تلاش */
+		try {
+			const ccMap = await lmlGeoBatch(out.map(function (p) { return p.hp.split(":")[0]; }));
+			out.forEach(function (p) { p.cc = ccMap[p.hp.split(":")[0]] || ""; });
+		} catch (e) { }
 		LML_SOCKS_MEM = { at: now, srcAt: LML_SOCKS_MEM.srcAt || now, list: cands, alive: out };
 		return { success: true, proxies: out, cached: false, tested: testedCount };
 	} catch (e) {
@@ -1625,7 +1649,8 @@ const Router = {
 			} catch (e) {
 				plainLinks = atob(subBase64);
 			}
-			/* IP-FREE: اول آی‌پی‌های خود کاربر، بعد چرخش — هرگز جایگزین نمی‌شوند */
+			/* IP-FREE: اول آی‌پی‌های خود کاربر، بعد چرخش — هرگز جایگزین نمی‌شوند؛ آی‌پی غیرکلودفلر فقط بدون TLS */
+			let badListSt = [];
 			{
 				const ownIpsSt = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
 				const mergedSt = ownIpsSt.slice();
@@ -1636,7 +1661,8 @@ const Router = {
 				}
 				if (mergedSt.length > 0) {
 					const badIpsSt = await lmlGetBadIps(env);
-					user.ips = mergedSt.filter(function (ip) { return !badIpsSt[ip]; }).join("\n");
+					badListSt = mergedSt.filter(function (ip) { return !!badIpsSt[ip]; });
+					user.ips = mergedSt.join("\n");
 				}
 			}
 			const userIpsMap = GLOBAL_ACTIVE_IPS.get(user.username);
@@ -1656,6 +1682,7 @@ const Router = {
 				tls: user.tls,
 				port: user.port,
 				ips: user.ips,
+				ips_bad: badListSt,
 				fingerprint: user.fingerprint || "chrome",
 				connection_type: user.connection_type || "vless",
 				user_proxy_iata: user.user_proxy_iata,
@@ -3374,6 +3401,18 @@ const Router = {
 				let reqPath = skip_country ? "/" : "/json/?fields=countryCode";
 				const payload = new TextEncoder().encode("GET " + reqPath + " HTTP/1.1\r\nHost: " + targetHost + "\r\nConnection: close\r\n\r\n");
 				
+				/* پیش‌تست سریع: handshake واقعی ساکس — اگر خود پروکسی مرده باشد، فوراً پاسخ روشن می‌گیرد */
+				if (/^socks/i.test(String(proxy).trim())) {
+					try {
+						let prePort = 1080;
+						const mm = String(workingProxy).match(/:(\d{2,5})(?:\/|$)/);
+						if (mm) prePort = Number(mm[1]);
+						if (ip) {
+							const pre = await lmlSocksAlive(ip + ":" + prePort, 2500);
+							if (!pre) return new Response(JSON.stringify({ success: false, error: "پروکسی زنده نیست (handshake ناموفق) — از «مخزن ساکس پروکسی» یک پروکسی تازه بردارید", ping: null }), { headers: { "Content-Type": "application/json" } });
+						}
+					} catch (e) { }
+				}
 				const s = await connectProxy(proxy, targetHost, 80, payload);
 				
 				const reader = s.readable.getReader();
@@ -3554,7 +3593,8 @@ const Router = {
 								return {
 								...user,
 								ips: finalIps,
-								ips_valid: lmlOnlyCfIps(mergedIps.filter(function (ip) { return !badIpsApi[ip]; }), 40),
+								ips_valid: lmlOnlyCfIps(mergedIps, 40),
+								ip_bad: mergedIps.filter(function (ip) { return !!badIpsApi[ip]; }),
 								ip_ssl_checked: true,
 								used_gb: (user.used_gb || 0) + ((GLOBAL_TRAFFIC_CACHE.get(user.username) || 0) / (1024 * 1024 * 1024)),
 								used_req: (user.used_req || 0) + (USER_REQ_CACHE.get(user.username) || 0),
@@ -4216,9 +4256,10 @@ rules:
 			}
 		}
 		let ipCcGt = {};
+		let lmlTlsIps = lmlCleanIps.slice();
 		if (lmlCleanIps.length && env) {
 			const badIpsGt = await lmlGetBadIps(env);
-			lmlCleanIps = lmlCleanIps.filter(function (ip) { return !badIpsGt[ip]; });
+			lmlTlsIps = lmlCleanIps.filter(function (ip) { return !badIpsGt[ip]; });
 			ipCcGt = await lmlGetIpCc(env);
 		}
 		const lmlIpFlag = coloHint ? (lmlFlagEmoji(lmlColoCountry(coloHint)) + " ") : "";
@@ -4368,7 +4409,7 @@ rules:
 		/* خانواده ۲: دامنه + TLS — گواهی همیشه معتبر */
 		/* خانواده ۳: آی‌پی + پورت HTTP بدون TLS — هیچ گواهی‌ای در کار نیست */
 		const lmlEntries = [];
-		lmlCleanIps.forEach((ipClean) => {
+		lmlTlsIps.forEach((ipClean) => {
 			ports.forEach((portStr) => { lmlEntries.push({ addr: ipClean, port: portStr, tls: true, ip: ipClean }); });
 		});
 		ports.forEach((portStr) => { lmlEntries.push({ addr: lmlHost, port: portStr, tls: true, ip: "" }); });
@@ -9728,7 +9769,7 @@ const HTML_TEMPLATES = {
 									<button type="button" class="btn btn-sm" id="btnOpenLmlRepo"><svg><use href="#i-globe"/></svg>مخزن آی‌پی تمیز</button>
 								</div>
 								<div class="lml-ip-status" id="sslTestStatus" style="display:none"></div>
-								<div class="note" style="margin-top:8px"><svg><use href="#i-info"/></svg><div>هر آی‌پی وارد کنید پذیرفته می‌شود (بدون بررسی رنج). برای اطمینان دکمهٔ <b>«تست آی‌پی تمیز»</b> را بزنید: ورکر با handshake واقعی TLS بررسی می‌کند که آی‌پی، لبه‌ی کلودفلر است و گواهی دامنهٔ شما را سرو می‌دهد. آی‌پی‌های مردود هم از این فیلد و هم از کانفیگ‌ها <b>خودکار حذف</b> می‌شوند ⇒ خطای SSL/CCL هرگز رخ نمی‌دهد. خانواده‌های لینک: <b>آی‌پی + TLS</b> (SNI=دامنه، allowInsecure=1)، <b>آی‌پی + بدون TLS</b> روی پورت HTTP، و <b>دامنه + TLS</b>.</div></div>
+								<div class="note" style="margin-top:8px"><svg><use href="#i-info"/></svg><div>هر نوع آی‌پی وارد کنید پذیرفته می‌شود — کلودفلر یا غیرکلودفلر (بدون هیچ بررسی رنج). آی‌پی کلودفلر کانفیگ TLS + بدونTLS می‌گیرد و آی‌پی غیرکلودفلر فقط بدونTLS (هرگز خطای SSL نمی‌دهد). 💡 پیشنهاد ویژه: برای اتصال پایدار و لوکیشن خارجی، از «مخزن ساکس پروکسی» در تب پروکسی خروجی استفاده کنید. برای اطمینان دکمهٔ <b>«تست آی‌پی تمیز»</b> را بزنید: ورکر با handshake واقعی TLS بررسی می‌کند که آی‌پی، لبه‌ی کلودفلر است و گواهی دامنهٔ شما را سرو می‌دهد. آی‌پی‌های مردود هم از این فیلد و هم از کانفیگ‌ها <b>خودکار حذف</b> می‌شوند ⇒ خطای SSL/CCL هرگز رخ نمی‌دهد. خانواده‌های لینک: <b>آی‌پی + TLS</b> (SNI=دامنه، allowInsecure=1)، <b>آی‌پی + بدون TLS</b> روی پورت HTTP، و <b>دامنه + TLS</b>.</div></div>
 							</div>
 							<div class="switch-row">
 								<div class="sr-text">
@@ -10134,7 +10175,7 @@ const HTML_TEMPLATES = {
 <div id="lmlPoolList" class="scan-log" style="max-height:150px;overflow:auto"></div>
 <p style="font-size:11px;color:var(--text-3);line-height:1.9">هر آی‌پی که در پنل تست شود یا از اسکنر مستقل (تست روی اینترنت واقعی ایران) وارد شود، <b>درجا و خودکار</b> به مخزن آی‌پی تمیز کلودفلر فرستاده می‌شود — بدون نمایش هیچ جزئیاتی، فقط پرچم کشور. افزودن به فرم کاربر فقط دستی است.</p>
 </div><div class="modal-foot"><button class="btn" data-close-modal="modalIpRepo">بستن</button><button class="btn btn-primary" id="btnGhRepoAdd" disabled>افزودن انتخاب‌شده‌ها به آی‌پی‌های کاربر</button></div></div></div>
-<div class="modal narrow" id="modalSocksRepo"><div class="modal-card"><div class="modal-head"><div class="mh-icon" style="background:var(--accent-soft);color:var(--accent)"><svg><use href="#i-bolt"/></svg></div><div class="mh-text"><h3 class="modal-title">مخزن ساکس پروکسی جهانی</h3><p class="modal-sub">تست زندهٔ handshake از بزرگ‌ترین منابع دنیا — سریع‌ترین‌ها اول</p></div><button type="button" class="icon-btn" data-close-modal="modalSocksRepo"><svg><use href="#i-x"/></svg></button></div><div class="modal-body">
+<div class="modal narrow" id="modalSocksRepo"><div class="modal-card"><div class="modal-head"><div class="mh-icon" style="background:var(--accent-soft);color:var(--accent)"><svg><use href="#i-bolt"/></svg></div><div class="mh-text"><h3 class="modal-title">مخزن ساکس پروکسی جهانی</h3><p class="modal-sub">تست زنده + پرچم کشور + لوکیشن — پیشنهاد ویژه برای اتصال پایدار</p></div><button type="button" class="icon-btn" data-close-modal="modalSocksRepo"><svg><use href="#i-x"/></svg></button></div><div class="modal-body">
 <p id="socksRepoInfo" style="font-size:12px;color:var(--text-3)">روی «یافتن پروکسی‌های سریع» بزنید — تست زنده از منابع جهانی (تا ~۲۰ ثانیه).</p>
 <div id="socksRepoList" class="scan-log" style="max-height:300px;overflow:auto"></div>
 </div><div class="modal-foot"><button class="btn" data-close-modal="modalSocksRepo">بستن</button><button class="btn btn-primary" id="btnSocksRefresh"><svg><use href="#i-search"/></svg>یافتن پروکسی‌های سریع</button></div></div></div>
@@ -10284,7 +10325,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.4';
+var CURRENT_VERSION = '1.0.0';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -11199,6 +11240,12 @@ function renderUsersUI(data) {
 
 	State.allUsers = users;
 	State.ipCcMap = data.ip_cc || {};
+	State.ipBadList = [];
+	try {
+		users.forEach(function (u) {
+			(u && Array.isArray(u.ip_bad) ? u.ip_bad : []).forEach(function (x) { if (State.ipBadList.indexOf(x) < 0) State.ipBadList.push(x); });
+		});
+	} catch (e) { }
 	State.serverTime = data.serverTime || now;
 	State.stats.total = users.length;
 	State.stats.online = users.reduce(function (s, u) { return s + (u.online_count || 0); }, 0);
@@ -11529,8 +11576,11 @@ function getvIeesLink(username) {
 	var enableTrojan = userConnType.indexOf('trojan') >= 0;
 	var enableSS = userConnType.indexOf('shadowsocks') >= 0;
 
+	var badSetP = {};
+	(State.ipBadList || []).forEach(function (x) { badSetP[x] = 1; });
+	var tlsIpsP = cleanIps.filter(function (x) { return !badSetP[x]; });
 	var lmlEntries = [];
-	cleanIps.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
+	tlsIpsP.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
 	ips.forEach(function (h) { ports.forEach(function (p) { lmlEntries.push({ addr: h, port: p, tls: true, ip: '' }); }); });
 	cleanIps.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: LML_HTTP_TWIN[p] || '80', tls: false, ip: cip }); }); });
 	lmlEntries.forEach(function (entry) {
@@ -12756,9 +12806,10 @@ async function lmlLoadSocksRepo(force) {
 			if (info) info.textContent = 'فعلاً پروکسی زنده‌ای پیدا نشد؛ دوباره تلاش کنید.';
 			return;
 		}
-		if (info) info.textContent = list.length + ' ساکس پروکسی زنده (تست handshake واقعی) — مرتب بر اساس سرعت' + (d.cached ? ' — کش' : '') + ':';
+		if (info) info.textContent = list.length + ' ساکس پروکسی زنده با پرچم کشور (تست handshake واقعی) — سریع‌ترین اول' + (d.cached ? ' — کش' : '') + ' • 💡 ساکس پروکسی = اتصال پایدار و خروجی خارجی (ChatGPT و...)' ;
 		box.innerHTML = list.map(function (p) {
 			return '<div style="display:flex;align-items:center;gap:8px;padding:5px 2px;border-bottom:1px solid var(--border)">' +
+				'<span style="flex:0 0 auto;font-size:15px">' + (p.cc ? flagText(p.cc) : '🌐') + '</span>' +
 				'<span class="mono" dir="ltr" style="flex:1">socks5://' + esc(p.hp) + '</span>' +
 				'<span style="font-size:11px;font-weight:700;color:' + (p.ms < 700 ? 'var(--ok)' : 'var(--text-3)') + '">' + p.ms + 'ms</span>' +
 				'<button type="button" class="btn btn-sm" data-socks-add="' + attr(p.hp) + '">افزودن به فرم</button>' +
@@ -14654,19 +14705,19 @@ async function lmlTestIpsNow(isAuto) {
 		if (!d || !Array.isArray(d.results)) throw new Error((d && d.error) || 'پاسخ نامعتبر از سرور');
 		var good = [], bad = [];
 		d.results.forEach(function (r) { if (r.ok) good.push(r.ip); else bad.push(r.ip); });
-		if ($('fIps')) $('fIps').value = good.join(String.fromCharCode(10));
+		if ($('fIps')) $('fIps').value = uniq.join(String.fromCharCode(10));
 		if (st) {
 			st.style.display = '';
 			st.textContent = '';
 			d.results.forEach(function (r) {
 				var div = document.createElement('div');
 				div.style.cssText = 'padding:2px 0;direction:rtl;text-align:right';
-				div.textContent = (r.ok ? '✅ ' : '❌ ') + (r.cc ? flagText(r.cc) + ' ' : '') + r.ip + ' — ' + r.reason + (r.ms ? ' (' + r.ms + 'ms)' : '');
+				div.textContent = (r.ok ? '✅ ' : '⚠️ ') + (r.cc ? flagText(r.cc) + ' ' : '') + r.ip + ' — ' + r.reason + (r.ok ? '' : ' — نگه داشته شد؛ کانفیگ بدون TLS (بدون خطای SSL)') + (r.ms ? ' (' + r.ms + 'ms)' : '');
 				st.appendChild(div);
 			});
 		}
-		if (good.length) toast('✅ ' + good.length + ' آی‌پی تمیز تأیید شد و در فیلد نگه داشته شد.', 'ok');
-		if (bad.length) toast('❌ ' + bad.length + ' آی‌پی تمیز نبود و حذف شد — این‌ها منبع خطای SSL بودند.', 'err', 9000);
+		if (good.length) toast('✅ ' + good.length + ' آی‌پی تمیز کلودفلر — کانفیگ کامل TLS + بدون TLS.', 'ok');
+		if (bad.length) toast('⚠️ ' + bad.length + ' آی‌پی غیرکلودفلر نگه داشته شد — فقط کانفیگ بدون TLS (هرگز خطای SSL نمی‌دهد). 💡 برای اتصال قطعی، ساکس پروکسی پیشنهاد می‌شود.', 'warn', 9000);
 	} catch (e) {
 		if (st) { st.style.display = ''; st.textContent = 'تست ناموفق: ' + (e && e.message ? e.message : e); }
 		toast('❌ تست آی‌پی ناموفق بود: ' + (e && e.message ? e.message : 'خطای ارتباط با سرور'), 'err', 9000);
@@ -16427,8 +16478,11 @@ ${COMMON_TOAST_HTML}
 			const enableVless = userConnType.includes('vless') || userConnType === 'vl' + 'e' + 'ss' || (!userConnType.includes('trojan') && !userConnType.includes('shadowsocks'));
 			const enableTrojan = userConnType.includes('trojan');
 			const enableSS = userConnType.includes('shadowsocks');
+			var badSetSt2 = {};
+			(Array.isArray(u.ips_bad) ? u.ips_bad : []).forEach(function (x) { badSetSt2[x] = 1; });
+			var tlsIpsSt2 = cleanIps.filter(function (x) { return !badSetSt2[x]; });
 			var lmlEntries = [];
-			cleanIps.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
+			tlsIpsSt2.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
 			ips.forEach(function (hh) { ports.forEach(function (p) { lmlEntries.push({ addr: hh, port: p, tls: true, ip: '' }); }); });
 			cleanIps.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: lmlHttpTwinPort(p), tls: false, ip: cip }); }); });
 			lmlEntries.forEach((entry) => {
