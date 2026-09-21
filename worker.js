@@ -339,39 +339,6 @@ async function updateFetchWorker(url, opts, ms) {
 	}
 }
 
-/* ============ LIVE IP REPO — تغییر زنده بدون دیپلوی مجدد ============
-   فایل live-ips.json را در همان مخزن گیت‌هاب ویرایش کنید:
-   { "enabled": true, "ips": ["1.2.3.4", "5.6.7.8"] }
-   این آی‌پی‌ها حداکثر ظرف ۵ دقیقه به کانفیگ همه‌ی کاربران اضافه می‌شوند
-   (بعد از آی‌پی‌های خود کاربر). هیچ خطایی هم هرگز نمی‌دهد. */
-const LML_LIVE_IPS_URL = "https://raw.githubusercontent.com/" + UPDATE_REPO_WORKER + "/main/live-ips.json";
-let LML_LIVE_IPS_CACHE = { at: 0, ips: null };
-async function getLiveIps(ctx) {
-	try {
-		const now = Date.now();
-		if (LML_LIVE_IPS_CACHE.ips !== null && (now - LML_LIVE_IPS_CACHE.at) < 300000) return LML_LIVE_IPS_CACHE.ips;
-		const refresh = (async () => {
-			try {
-				const r = await updateFetchWorker(LML_LIVE_IPS_URL + "?t=" + Date.now(), { headers: { "User-Agent": "Mozilla/5.0", "Cache-Control": "no-cache" } }, 4000);
-				if (r && r.ok) {
-					const j = await r.json();
-					if (j && j.enabled !== false && Array.isArray(j.ips)) {
-						LML_LIVE_IPS_CACHE = { at: Date.now(), ips: lmlOnlyCfIps(j.ips.map(function (x) { return String(x || "").trim(); }), 40) };
-					} else {
-						LML_LIVE_IPS_CACHE = { at: Date.now(), ips: [] };
-					}
-				}
-			} catch (e) { }
-		})();
-		if (LML_LIVE_IPS_CACHE.ips === null) {
-			await Promise.race([refresh, new Promise(function (res) { setTimeout(res, 1500); })]);
-		} else {
-			safeWaitUntil(ctx, refresh);
-		}
-		return LML_LIVE_IPS_CACHE.ips || [];
-	} catch (e) { return []; }
-}
-
 /* Ask GitHub which .js files the repo really has, so a renamed worker file
    can never break the auto-updater. Never throws. */
 async function discoverUpdateFilesWorker(branch) {
@@ -1201,11 +1168,10 @@ const Router = {
 			} catch (e) {
 				plainLinks = atob(subBase64);
 			}
-			/* IP-FREE: اول آی‌پی‌های خود کاربر، بعد آی‌پی‌های زنده‌ی گیت‌هاب، بعد چرخش — هرگز جایگزین نمی‌شوند */
+			/* IP-FREE: اول آی‌پی‌های خود کاربر، بعد چرخش — هرگز جایگزین نمی‌شوند */
 			{
 				const ownIpsSt = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
-				const liveIpsSt = await getLiveIps(typeof ctx !== "undefined" && ctx ? ctx : null);
-				const mergedSt = ownIpsSt.concat(liveIpsSt.filter(function (ip) { return ownIpsSt.indexOf(ip) < 0; }));
+				const mergedSt = ownIpsSt.slice();
 				if (user.auto_rotate_ip === 1) {
 					const cachedIpsData = await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null);
 					const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
@@ -2592,7 +2558,6 @@ const Router = {
 				GLOBAL_IPS_CACHE = {};
 				GLOBAL_IPS_LAST_FETCH = 0;
 				PROXY_CC_CACHE.clear();
-				LML_LIVE_IPS_CACHE = { at: 0, ips: null };
 				cachedVipCountries = [];
 				lastVipCountriesFetch = 0;
 				CF_USAGE_CACHE = null;
@@ -3000,11 +2965,10 @@ const Router = {
 						const now = Date.now();
 						const cachedIpsData = (results || []).some(u=>u.auto_rotate_ip===1) ? await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null) : {};
 
-						const liveIpsAll = await getLiveIps(typeof ctx !== "undefined" && ctx ? ctx : null);
 						const enrichedUsers = (results || []).map((user) => {
-							/* IP-FREE: آی‌پی‌های خود کاربر همیشه اول و ثابت است؛ زنده و چرخش فقط اضافه می‌شوند */
+							/* IP-FREE: آی‌پی‌های خود کاربر همیشه اول و ثابت است؛ چرخش فقط اضافه می‌کند */
 							const ownIpsList = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
-							const mergedIps = ownIpsList.concat(liveIpsAll.filter(function (ip) { return ownIpsList.indexOf(ip) < 0; }));
+							const mergedIps = ownIpsList.slice();
 							if (user.auto_rotate_ip === 1) {
 								const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
 								randomIps.forEach(function (ip) { if (mergedIps.indexOf(ip) < 0) mergedIps.push(ip); });
@@ -3641,7 +3605,7 @@ rules:
 	async generateText(user, host, ctx = null, env = null, coloHint = "") {
 		const _AI_BLOCKER = atob("TE1MX1BBTkVMX0NPUkVfU1lTVEVNX1JFQURZ");
 		let ips = [host];
-		/* IP-FREE: اول آی‌پی‌های خود کاربر، بعد آی‌پی‌های زنده‌ی گیت‌هاب؛ چرخش خودکار فقط «اضافه» می‌کند */
+		/* IP-FREE: آی‌پی‌های خود کاربر همیشه اول است؛ چرخش خودکار فقط «اضافه» می‌کند */
 		let parsedUserIps = [];
 		if (user.ips && _AI_BLOCKER.length > 0) {
 			parsedUserIps = String(user.ips)
@@ -3649,10 +3613,7 @@ rules:
 				.map((ip) => ip.trim())
 				.filter((ip) => ip.length > 0);
 		}
-		const liveIpsGt = await getLiveIps(typeof ctx !== "undefined" && ctx ? ctx : null);
-		if (parsedUserIps.length > 0 || liveIpsGt.length > 0) {
-			ips = parsedUserIps.concat(liveIpsGt.filter((ip) => parsedUserIps.indexOf(ip) < 0));
-		}
+		if (parsedUserIps.length > 0) ips = parsedUserIps;
 		if (user.auto_rotate_ip === 1) {
 			const cachedIpsData = await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null);
 			const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
@@ -9558,6 +9519,11 @@ const HTML_TEMPLATES = {
 <h4>۱. دریافت و اجرا</h4><p>روی ویندوز Python 3.9 یا جدیدتر، و روی اندروید Pydroid نصب کنید. فایل را دانلود و اجرا کنید؛ رابط در مرورگر باز می‌شود. اگر خودکار باز نشد، آدرس چاپ‌شده در ترمینال را باز کنید.</p><a class="btn btn-primary" href="/lml-scanner/download" download>دانلود موتور مستقل</a><pre dir="ltr">python LML-Scanner.py</pre>
 <h4>۲. تست دامنهٔ خودتان</h4><p>دامنه همین پنل را در اسکنر وارد کنید. فایل Worker جدید باید قبلاً مستقر شده باشد. پس از اسکن، «خروجی JSON برای پنل» بگیرید.</p>
 <h4>۳. ورود و اعمال نتایج</h4><input class="input" type="file" id="lmlScanFile" accept=".json,application/json"><label>حداکثر آی‌پی قابل اعمال<input class="input" id="ipCount" type="number" min="1" max="100" value="10"></label><p id="lmlImportSummary">فایلی انتخاب نشده است.</p><div id="ipLoading" class="scan-log hidden"></div><p>نتایج مربوط به اینترنتِ زمان تست هستند. هنگام اعمال، چرخش تصادفی خاموش می‌شود. سپس فرم کاربر را ذخیره کنید. برای تست مجدد همان آی‌پی‌ها، آن‌ها را در بخش دلخواه اسکنر وارد کنید.</p>
+<h4>📦 مخزن آی‌پی گیت‌هاب (زنده)</h4>
+<p id="lmlGhRepoInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت مخزن...</p>
+<div id="lmlGhRepoList" class="scan-log" style="max-height:170px;overflow:auto"></div>
+<button type="button" class="btn btn-primary" id="btnGhRepoAdd" disabled style="margin-top:10px">افزودن انتخاب‌شده‌ها به آی‌پی‌های کاربر</button>
+<p style="font-size:11.5px;color:var(--text-3)">منبع: فایل <span class="mono" dir="ltr">live-ips.json</span> در مخزن گیت‌هاب — با ویرایش آن فایل، این لیست بدون دیپلوی به‌روز می‌شود. آی‌پی‌ها فقط با کلیک شما و به‌صورت دستی به فرم کاربر اضافه می‌شوند (هیچ افزودن خودکاری در کار نیست).</p>
 </div><div class="modal-foot"><button class="btn" data-close-modal="modalIps">بستن</button><button class="btn btn-primary" id="btnApplyIps" disabled>اعمال بهترین‌ها در فرم کاربر</button></div></div></div>
 <div class="modal narrow" id="lmlReleaseModal"><div class="modal-card"><div class="modal-head"><h3 class="modal-title">تازه‌های LML</h3><button class="icon-btn" data-close-modal="lmlReleaseModal">×</button></div><div class="modal-body"><h4 id="lmlReleaseVersion"></h4><ul id="lmlReleaseNotes"></ul><p>این اعلان با انتشار Worker جدید روی دامنهٔ خودتان به‌روز می‌شود. هیچ سورسی از سرور شخص ثالث نصب نمی‌شود.</p></div><div class="modal-foot"><button class="btn btn-primary" id="lmlReleaseSeen">متوجه شدم</button><button class="btn" id="lmlReleaseRefresh">بارگذاری نسخهٔ منتشرشده</button></div></div></div>
 
@@ -11992,6 +11958,7 @@ async function openIpRepoModal() {
 	var log = $('ipLoading');
 	if (log) { log.textContent = ''; log.classList.add('hidden'); }
 	vset('ipCount', vval('fIpCount') || '20');
+	lmlLoadGhRepo();
 }
 window.openIpSelectorModal = openIpRepoModal;
 
@@ -12031,6 +11998,69 @@ on($('btnApplyIps'), 'click', applySelectedIps);
 on($('btnOpenIpRepo'), 'click', openIpRepoModal);
 on($('btnOpenIpRepo2'), 'click', openIpRepoModal);
 on($('btnOpenIpRepo3'), 'click', openIpRepoModal);
+
+/* ============================================================
+   مخزن آی‌پی گیت‌هاب (live-ips.json) — فقط افزودن دستی توسط مدیر
+   هیچ آی‌پی‌ای به‌صورت خودکار به کاربران اضافه نمی‌شود.
+   ============================================================ */
+var LML_GH_REPO_URL = 'https://raw.githubusercontent.com/nukesamp-crypto/LML-PANEL/main/live-ips.json';
+var lmlGhRepoCache = { at: 0, ips: null };
+async function lmlLoadGhRepo() {
+	var info = $('lmlGhRepoInfo'), box = $('lmlGhRepoList'), btn = $('btnGhRepoAdd');
+	if (!info || !box || !btn) return;
+	try {
+		var fresh = (lmlGhRepoCache.ips !== null && (Date.now() - lmlGhRepoCache.at) < 300000);
+		if (!fresh) {
+			info.textContent = 'در حال دریافت مخزن از گیت‌هاب...';
+			var res = await fetch(LML_GH_REPO_URL + '?t=' + Date.now(), { cache: 'no-store' });
+			if (!res.ok) throw new Error('HTTP ' + res.status);
+			var data = await res.json().catch(function () { return null; });
+			var ips = [];
+			if (data && data.enabled !== false && Array.isArray(data.ips)) {
+				var seenGh = {};
+				data.ips.forEach(function (x) {
+					x = String(x || '').trim();
+					if (/^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}$/.test(x) && x.split('.').every(function (n) { return Number(n) <= 255; }) && !seenGh[x]) {
+						seenGh[x] = 1; ips.push(x);
+					}
+				});
+			}
+			lmlGhRepoCache = { at: Date.now(), ips: ips };
+		}
+		var list = lmlGhRepoCache.ips || [];
+		if (!list.length) {
+			info.textContent = 'مخزن گیت‌هاب خالی است — فایل live-ips.json را در مخزن ویرایش کنید تا آی‌پی‌ها اینجا نمایش داده شوند.';
+			box.innerHTML = '';
+			btn.disabled = true;
+			return;
+		}
+		info.textContent = list.length + ' آی‌پی در مخزن گیت‌هاب — انتخاب کنید و با دکمه زیر به فرم کاربر اضافه کنید:';
+		box.innerHTML = list.map(function (ip) {
+			return '<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer"><input type="checkbox" class="lml-gh-ip" value="' + attr(ip) + '" checked><span class="mono" dir="ltr">' + esc(ip) + '</span></label>';
+		}).join('');
+		btn.disabled = false;
+	} catch (e) {
+		info.textContent = 'دریافت مخزن ناموفق بود: ' + (e && e.message ? e.message : e);
+		box.innerHTML = '';
+		btn.disabled = true;
+	}
+}
+function lmlAddGhRepoIps() {
+	var checked = $$('.lml-gh-ip').filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
+	if (!checked.length) { toast('هیچ آی‌پی‌ای از مخزن انتخاب نشده است.', 'warn'); return; }
+	var NL = String.fromCharCode(10);
+	var cur = (($('fIps') && $('fIps').value) || '').split(NL).map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
+	var added = 0;
+	checked.forEach(function (ip) { if (cur.indexOf(ip) < 0) { cur.push(ip); added++; } });
+	if ($('fIps')) $('fIps').value = cur.join(NL);
+	closeModal('modalIps');
+	openModal('modalUser');
+	if (added > 0) toast('✅ ' + added + ' آی‌پی از مخزن گیت‌هاب به فرم اضافه شد — کاربر را ذخیره کنید.', 'ok');
+	else toast('این آی‌پی‌ها از قبل در فرم کاربر بودند.', 'ok');
+}
+on($('btnGhRepoAdd'), 'click', lmlAddGhRepoIps);
+window.lmlLoadGhRepo = lmlLoadGhRepo;
+window.lmlAddGhRepoIps = lmlAddGhRepoIps;
 
 /* VIP proxy cache (used to highlight known-good proxy links) */
 async function initVipCache() {
