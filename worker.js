@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.0";
+const LML_PANEL_VERSION = "1.0.1";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -279,25 +279,81 @@ async function lmlProbeIpTls(ip, port, sniDomain, timeoutMs) {
 		try { if (sock) sock.close(); } catch (e) { }
 	}
 }
-let LML_IP_TEST_MEM = { at: 0, map: null };
-async function lmlGetBadIps(env) {
+let LML_IP_TEST_MEM = { at: 0, bad: null, cc: null };
+async function lmlLoadIpTestMem(env) {
+	const now = Date.now();
+	if (LML_IP_TEST_MEM.bad && (now - LML_IP_TEST_MEM.at) < 300000) return LML_IP_TEST_MEM;
+	const bad = {};
+	const cc = {};
 	try {
-		const now = Date.now();
-		if (LML_IP_TEST_MEM.map && (now - LML_IP_TEST_MEM.at) < 300000) return LML_IP_TEST_MEM.map;
-		const map = {};
 		if (env && env.DB) {
 			const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ip_test_cache'").first();
 			if (row && row.value) {
 				const j = JSON.parse(row.value);
 				for (const k in j) {
 					const e = j[k];
-					if (e && Number(e.ok) === 0 && (now - (Number(e.at) || 0)) < 86400000) map[k] = 1;
+					if (!e) continue;
+					if (Number(e.ok) === 0 && (now - (Number(e.at) || 0)) < 86400000) bad[k] = 1;
+					if (Number(e.ok) === 1 && e.cc) cc[k] = String(e.cc);
 				}
 			}
 		}
-		LML_IP_TEST_MEM = { at: now, map: map };
-		return map;
-	} catch (e) { return {}; }
+	} catch (e) { }
+	LML_IP_TEST_MEM = { at: now, bad: bad, cc: cc };
+	return LML_IP_TEST_MEM;
+}
+async function lmlGetBadIps(env) { return (await lmlLoadIpTestMem(env)).bad || {}; }
+async function lmlGetIpCc(env) { return (await lmlLoadIpTestMem(env)).cc || {}; }
+/* کشور آی‌پی (برای پرچم) — best-effort، هرگز خطا نمی‌دهد */
+async function lmlGeoCountry(ip) {
+	try {
+		const ctl = new AbortController();
+		const t = setTimeout(function () { try { ctl.abort(); } catch (e) { } }, 2500);
+		const r = await fetch("http://ip-api.com/json/" + encodeURIComponent(ip) + "?fields=countryCode", { signal: ctl.signal, headers: { "User-Agent": "Mozilla/5.0" } });
+		clearTimeout(t);
+		if (!r.ok) return "";
+		const j = await r.json();
+		return (j && j.countryCode) ? String(j.countryCode).toUpperCase() : "";
+	} catch (e) { return ""; }
+}
+async function lmlSaveIpTestResults(results, env) {
+	try {
+		const nowT = Date.now();
+		let cacheJ = {};
+		const rowT = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ip_test_cache'").first();
+		if (rowT && rowT.value) { try { cacheJ = JSON.parse(rowT.value) || {}; } catch (e) { cacheJ = {}; } }
+		results.forEach(function (r) {
+			const prev = cacheJ[r.ip] || {};
+			cacheJ[r.ip] = { ok: r.ok, at: nowT, cc: r.cc || prev.cc || "" };
+		});
+		const keysT = Object.keys(cacheJ);
+		if (keysT.length > 400) {
+			keysT.sort(function (a, b) { return (cacheJ[a].at || 0) - (cacheJ[b].at || 0); });
+			keysT.slice(0, keysT.length - 400).forEach(function (k) { delete cacheJ[k]; });
+		}
+		await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lml_ip_test_cache', ?)").bind(JSON.stringify(cacheJ)).run();
+		LML_IP_TEST_MEM = { at: 0, bad: null, cc: null };
+	} catch (e) { }
+}
+/* تست خودکار پس‌زمینه: هنگام ذخیره کاربر، بدون فشردن هیچ دکمه‌ای */
+async function lmlAutoTestIps(ipsList, env, hostName) {
+	try {
+		const ips = lmlOnlyCfIps(ipsList, 40);
+		if (!ips.length) return;
+		const sniHost = await lmlPanelHostResolve(env, hostName);
+		const results = [];
+		const BATCH = 8;
+		for (let i = 0; i < ips.length; i += BATCH) {
+			const slice = ips.slice(i, i + BATCH);
+			const rs = await Promise.all(slice.map(async function (ip) {
+				const p = await lmlProbeIpTls(ip, 443, sniHost, 4500);
+				const cc = p.ok ? await lmlGeoCountry(ip) : "";
+				return { ip: ip, ok: p.ok ? 1 : 0, ms: p.ms, reason: p.reason, cc: cc };
+			}));
+			rs.forEach(function (r) { results.push(r); });
+		}
+		await lmlSaveIpTestResults(results, env);
+	} catch (e) { }
 }
 /* دامنه‌ی واقعی پنل: هرگز آی‌پی نمی‌شود (منبع خطای SSL در مرورگر همین بود) */
 let LML_PANEL_HOST_CACHE = "";
@@ -1997,26 +2053,37 @@ const Router = {
 				const BATCH = 8;
 				for (let i = 0; i < ips.length; i += BATCH) {
 					const slice = ips.slice(i, i + BATCH);
-					const rs = await Promise.all(slice.map(function (ip) { return lmlProbeIpTls(ip, portT, sniHost, 4500); }));
-					rs.forEach(function (r, k) { results.push({ ip: slice[k], ok: r.ok ? 1 : 0, ms: r.ms, reason: r.reason }); });
+					const rs = await Promise.all(slice.map(async function (ip) {
+						const p = await lmlProbeIpTls(ip, portT, sniHost, 4500);
+						const cc = p.ok ? await lmlGeoCountry(ip) : "";
+						return { ip: ip, ok: p.ok ? 1 : 0, ms: p.ms, reason: p.reason, cc: cc };
+					}));
+					rs.forEach(function (r) { results.push(r); });
 				}
-				try {
-					const nowT = Date.now();
-					let cacheJ = {};
-					const rowT = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ip_test_cache'").first();
-					if (rowT && rowT.value) { try { cacheJ = JSON.parse(rowT.value) || {}; } catch (e) { cacheJ = {}; } }
-					results.forEach(function (r) { cacheJ[r.ip] = { ok: r.ok, at: nowT }; });
-					const keysT = Object.keys(cacheJ);
-					if (keysT.length > 400) {
-						keysT.sort(function (a, b) { return (cacheJ[a].at || 0) - (cacheJ[b].at || 0); });
-						keysT.slice(0, keysT.length - 400).forEach(function (k) { delete cacheJ[k]; });
-					}
-					await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lml_ip_test_cache', ?)").bind(JSON.stringify(cacheJ)).run();
-					LML_IP_TEST_MEM = { at: 0, map: null };
-				} catch (e) { }
+				await lmlSaveIpTestResults(results, env);
 				return new Response(JSON.stringify({ success: true, host: sniHost, results: results }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 			} catch (e) {
 				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+			}
+		}
+		if (url.pathname === "/api/ip-pool" && request.method === "GET") {
+			try {
+				const session = await DbService.getSession(request, env);
+				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				let cacheJ = {};
+				try {
+					const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ip_test_cache'").first();
+					if (row && row.value) cacheJ = JSON.parse(row.value) || {};
+				} catch (e) { }
+				const out = [];
+				for (const k in cacheJ) {
+					const e = cacheJ[k];
+					if (e && Number(e.ok) === 1) out.push({ ip: k, cc: e.cc || "", at: e.at || 0 });
+				}
+				out.sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
+				return new Response(JSON.stringify({ success: true, ips: out.slice(0, 100) }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+			} catch (e) {
+				return new Response(JSON.stringify({ success: true, ips: [] }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
 			}
 		}
 		if (url.pathname === "/api/scan-ips" && request.method === "POST") {
@@ -2764,7 +2831,7 @@ const Router = {
 				GLOBAL_IPS_CACHE = {};
 				GLOBAL_IPS_LAST_FETCH = 0;
 				PROXY_CC_CACHE.clear();
-				LML_IP_TEST_MEM = { at: 0, map: null };
+				LML_IP_TEST_MEM = { at: 0, bad: null, cc: null };
 				cachedVipCountries = [];
 				lastVipCountriesFetch = 0;
 				CF_USAGE_CACHE = null;
@@ -3138,6 +3205,10 @@ const Router = {
 						await env.DB.prepare("UPDATE users SET username = ?, limit_gb = ?, expiry_days = ?, limit_req = ?, ips = ?, tls = ?, port = ?, fingerprint = ?, max_connections = ?, ip_limit = ?, block_porn = ?, block_ads = ?, frag_len = ?, frag_int = ?, advanced_frag = ?, cipher_suites = ?, tls_mask = ?, user_proxy_iata = ?, user_socks5 = ?, user_proxy_ip = ?, auto_reset_vol_days = ?, auto_reset_req_days = ?, auto_rotate_ip = ?, rotate_time = ?, ip_operator = ?, ip_count = ?, auto_rotate_user_proxy = ?, start_on_first_connect = ?, enable_direct = ?, connection_type = CASE WHEN ? IS NOT NULL THEN ? ELSE connection_type END, trojan_hash = COALESCE(trojan_hash, ?) WHERE username = ?")
 							.bind(new_username || username, limit_gb ? parseFloat(limit_gb) : null, expiry_days ? parseInt(expiry_days) : null, limit_req ? parseInt(limit_req) : null, ips || null, tls, port, fingerprint || "chrome", ip_limit ? parseInt(ip_limit) : null, ip_limit ? parseInt(ip_limit) : null, block_porn ? 1 : 0, block_ads ? 1 : 0, frag_len !== undefined ? frag_len : "200-3000", frag_int !== undefined ? frag_int : "1-2", advanced_frag || null, cipher_suites || null, tls_mask || null, user_proxy_iata || null, user_socks5 || null, user_proxy_ip || null, auto_reset_vol_days ? parseInt(auto_reset_vol_days) : 0, auto_reset_req_days ? parseInt(auto_reset_req_days) : 0, auto_rotate_ip || 0, rotate_time || 0, ip_operator || "all", ip_count || 20, auto_rotate_user_proxy ? 1 : 0, start_on_first_connect ? 1 : 0, enable_direct !== undefined ? (enable_direct ? 1 : 0) : 1, finalConnType !== undefined ? finalConnType : null, finalConnType !== undefined ? finalConnType : null, trojanHash, username)
 							.run();
+						try {
+							const autoTestPut = String(ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
+							if (autoTestPut.length) safeWaitUntil(typeof ctx !== "undefined" && ctx ? ctx : null, lmlAutoTestIps(autoTestPut, env, url.hostname));
+						} catch (e) { }
 						return new Response(JSON.stringify({ success: true }), { headers: { "Content-Type": "application/json" } });
 					}
 				}
@@ -3173,6 +3244,7 @@ const Router = {
 						const cachedIpsData = (results || []).some(u=>u.auto_rotate_ip===1) ? await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null) : {};
 
 						const badIpsApi = await lmlGetBadIps(env);
+						const ipCcApi = await lmlGetIpCc(env);
 						const enrichedUsers = (results || []).map((user) => {
 							/* IP-FREE: آی‌پی‌های خود کاربر همیشه اول و ثابت است؛ چرخش فقط اضافه می‌کند */
 							const ownIpsList = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
@@ -3223,6 +3295,7 @@ const Router = {
 						return new Response(
 							JSON.stringify({
 								users: enrichedUsers,
+								ip_cc: ipCcApi,
 								serverTime: now,
 								cfRequestsToday: cfReqs.today,
 								cfRequestsTotal: cfReqs.total,
@@ -3316,6 +3389,10 @@ const Router = {
 						await env.DB.prepare("INSERT INTO users (username, uuid, limit_gb, expiry_days, limit_req, ips, connection_type, tls, port, fingerprint, max_connections, ip_limit, used_gb, used_req, created_at, is_active, block_porn, block_ads, frag_len, frag_int, advanced_frag, cipher_suites, tls_mask, user_proxy_iata, user_socks5, user_proxy_ip, auto_reset_vol_days, auto_reset_req_days, last_reset_vol_time, last_reset_req_time, auto_rotate_ip, rotate_time, ip_operator, ip_count, last_rotate_time, auto_rotate_user_proxy, start_on_first_connect, first_connection_time, trojan_hash, enable_direct, reseller_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 							.bind(username, finalUuid, limit_gb ? parseFloat(limit_gb) : null, expiry_days ? parseInt(expiry_days) : null, limit_req ? parseInt(limit_req) : null, ips || null, finalConnType, tls, port, fingerprint || "chrome", ip_limit ? parseInt(ip_limit) : null, ip_limit ? parseInt(ip_limit) : null, finalUsedGb, finalUsedReq, finalCreatedAt, finalIsActive, block_porn ? 1 : 0, block_ads ? 1 : 0, frag_len !== undefined ? frag_len : "200-3000", frag_int !== undefined ? frag_int : "1-2", advanced_frag || null, cipher_suites || null, tls_mask || null, user_proxy_iata || null, user_socks5 || null, user_proxy_ip || null, auto_reset_vol_days ? parseInt(auto_reset_vol_days) : 0, auto_reset_req_days ? parseInt(auto_reset_req_days) : 0, todayUtc, todayUtc, auto_rotate_ip || 0, rotate_time || 0, ip_operator || "all", ip_count || 20, nowTime, auto_rotate_user_proxy ? 1 : 0, start_on_first_connect ? 1 : 0, null, trojanHash, enable_direct !== undefined ? (enable_direct ? 1 : 0) : 1, assignedResellerId)
 							.run();
+						try {
+							const autoTestPost = String(ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
+							if (autoTestPost.length) safeWaitUntil(typeof ctx !== "undefined" && ctx ? ctx : null, lmlAutoTestIps(autoTestPost, env, url.hostname));
+						} catch (e) { }
 						return new Response(JSON.stringify({ success: true, user: { username, uuid: finalUuid } }), { headers: { "Content-Type": "application/json" } });
 					} catch (err) {
 						return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
@@ -3838,9 +3915,11 @@ rules:
 				lmlCleanIps = lmlOnlyCfIps(rawIps, wantCount);
 			}
 		}
+		let ipCcGt = {};
 		if (lmlCleanIps.length && env) {
 			const badIpsGt = await lmlGetBadIps(env);
 			lmlCleanIps = lmlCleanIps.filter(function (ip) { return !badIpsGt[ip]; });
+			ipCcGt = await lmlGetIpCc(env);
 		}
 		const lmlIpFlag = coloHint ? (lmlFlagEmoji(lmlColoCountry(coloHint)) + " ") : "";
 		let ports = String(user.port || "443")
@@ -4001,6 +4080,7 @@ rules:
 					const ip = entry.addr;
 					const portStr = entry.port;
 					const isTlsPort = entry.tls;
+					const entryIpTag = entry.ip ? (" " + (ipCcGt[entry.ip] ? lmlFlagEmoji(ipCcGt[entry.ip]) + " " : "") + entry.ip) : " 🔒";
 					const tlsVal = isTlsPort ? "tls" : "none";
 					let userFrag = "";
 					if (user.frag_len && user.frag_int) userFrag += "&fragment=" + encodeURIComponent(user.frag_len + "," + user.frag_int + (isTlsPort ? ",tlshello" : ""));
@@ -4012,15 +4092,15 @@ rules:
 					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost) : "";
 
 					if (enableVless) {
-						const remark = "LML | " + lmlIpFlag + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " 🔒") + " | " + user.username;
+						const remark = "LML | " + lmlIpFlag + proxy.flagEmoji + entryIpTag + " | " + user.username;
 						links.push("vl" + "e" + "ss://" + user.uuid + "@" + ip + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&encryption=none&host=" + host + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(remark));
 					}
 					if (enableTrojan) {
-						const trojanRemark = "LML | " + lmlIpFlag + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " 🔒") + " | " + user.username;
+						const trojanRemark = "LML | " + lmlIpFlag + proxy.flagEmoji + entryIpTag + " | " + user.username;
 						links.push("trojan://" + user.uuid + "@" + ip + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&host=" + lmlHost + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(trojanRemark));
 					}
 					if (enableSS) {
-						const ssRemark = "LML | " + lmlIpFlag + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " 🔒") + " | " + user.username;
+						const ssRemark = "LML | " + lmlIpFlag + proxy.flagEmoji + entryIpTag + " | " + user.username;
 						const methodPass = btoa("aes-256-gcm:" + user.uuid);
 						let pluginOpts = "v2ray-plugin;mode=websocket;host=" + lmlHost + ";path=" + decodeURIComponent(proxy.currentDynPath) + (isTlsPort ? ";tls" : "");
 						let pluginStr = encodeURIComponent(pluginOpts);
@@ -9732,11 +9812,14 @@ const HTML_TEMPLATES = {
 <h4>۱. دریافت و اجرا</h4><p>روی ویندوز Python 3.9 یا جدیدتر، و روی اندروید Pydroid نصب کنید. فایل را دانلود و اجرا کنید؛ رابط در مرورگر باز می‌شود. اگر خودکار باز نشد، آدرس چاپ‌شده در ترمینال را باز کنید.</p><a class="btn btn-primary" href="/lml-scanner/download" download>دانلود موتور مستقل</a><pre dir="ltr">python LML-Scanner.py</pre>
 <h4>۲. تست دامنهٔ خودتان</h4><p>دامنه همین پنل را در اسکنر وارد کنید. فایل Worker جدید باید قبلاً مستقر شده باشد. پس از اسکن، «خروجی JSON برای پنل» بگیرید.</p>
 <h4>۳. ورود و اعمال نتایج</h4><input class="input" type="file" id="lmlScanFile" accept=".json,application/json"><label>حداکثر آی‌پی قابل اعمال<input class="input" id="ipCount" type="number" min="1" max="100" value="10"></label><p id="lmlImportSummary">فایلی انتخاب نشده است.</p><div id="ipLoading" class="scan-log hidden"></div><p>نتایج مربوط به اینترنتِ زمان تست هستند. هنگام اعمال، چرخش تصادفی خاموش می‌شود. سپس فرم کاربر را ذخیره کنید. برای تست مجدد همان آی‌پی‌ها، آن‌ها را در بخش دلخواه اسکنر وارد کنید.</p>
-<h4>📦 مخزن آی‌پی گیت‌هاب (زنده)</h4>
-<p id="lmlGhRepoInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت مخزن...</p>
-<div id="lmlGhRepoList" class="scan-log" style="max-height:170px;overflow:auto"></div>
+<h4>📦 مخزن آی‌پی LML (زنده)</h4>
+<p id="lmlGhRepoInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت مخزن LML...</p>
+<div id="lmlGhRepoList" class="scan-log" style="max-height:150px;overflow:auto"></div>
+<h4 style="margin-top:14px">🏆 آی‌پی‌های تأییدشده (تست خودکار از سراسر ایران)</h4>
+<p id="lmlPoolInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت...</p>
+<div id="lmlPoolList" class="scan-log" style="max-height:150px;overflow:auto"></div>
 <button type="button" class="btn btn-primary" id="btnGhRepoAdd" disabled style="margin-top:10px">افزودن انتخاب‌شده‌ها به آی‌پی‌های کاربر</button>
-<p style="font-size:11.5px;color:var(--text-3)">منبع: فایل <span class="mono" dir="ltr">live-ips.json</span> در مخزن گیت‌هاب — با ویرایش آن فایل، این لیست بدون دیپلوی به‌روز می‌شود. آی‌پی‌ها فقط با کلیک شما و به‌صورت دستی به فرم کاربر اضافه می‌شوند (هیچ افزودن خودکاری در کار نیست).</p>
+<p style="font-size:11.5px;color:var(--text-3)">مخزن رسمی LML به‌صورت <b>زنده</b> به‌روز می‌شود (حداکثر ۱ دقیقه، بدون دیپلوی). آی‌پی‌های تأییدشده به‌صورت خودکار از تست‌های واقعی از نقاط مختلف ایران جمع‌آوری می‌شوند — فقط نتیجهٔ نهایی و پرچم کشور نمایش داده می‌شود، بدون هیچ جزئیاتی. افزودن به فرم کاربر فقط دستی و با کلیک شما انجام می‌شود.</p>
 </div><div class="modal-foot"><button class="btn" data-close-modal="modalIps">بستن</button><button class="btn btn-primary" id="btnApplyIps" disabled>اعمال بهترین‌ها در فرم کاربر</button></div></div></div>
 <div class="modal narrow" id="lmlReleaseModal"><div class="modal-card"><div class="modal-head"><h3 class="modal-title">تازه‌های LML</h3><button class="icon-btn" data-close-modal="lmlReleaseModal">×</button></div><div class="modal-body"><h4 id="lmlReleaseVersion"></h4><ul id="lmlReleaseNotes"></ul><p>این اعلان با انتشار Worker جدید روی دامنهٔ خودتان به‌روز می‌شود. هیچ سورسی از سرور شخص ثالث نصب نمی‌شود.</p></div><div class="modal-foot"><button class="btn btn-primary" id="lmlReleaseSeen">متوجه شدم</button><button class="btn" id="lmlReleaseRefresh">بارگذاری نسخهٔ منتشرشده</button></div></div></div>
 
@@ -9884,7 +9967,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.0';
+var CURRENT_VERSION = '1.0.1';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -10798,6 +10881,7 @@ function renderUsersUI(data) {
 	});
 
 	State.allUsers = users;
+	State.ipCcMap = data.ip_cc || {};
 	State.serverTime = data.serverTime || now;
 	State.stats.total = users.length;
 	State.stats.online = users.reduce(function (s, u) { return s + (u.online_count || 0); }, 0);
@@ -11145,7 +11229,8 @@ function getvIeesLink(username) {
 				if (user.tls_mask) userFrag += '&mask=' + encodeURIComponent(user.tls_mask);
 				var insecureFlag = (isTlsPort && entry.ip) ? '1' : '0';
 				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host) : '';
-				var remark = 'LML | ' + proxy.flagEmoji + (entry.ip ? (' ' + entry.ip) : ' 🔒') + ' | ' + user.username;
+				var ipCcP = entry.ip ? ((State.ipCcMap || {})[entry.ip] || '') : '';
+				var remark = 'LML | ' + proxy.flagEmoji + (entry.ip ? (' ' + (ipCcP ? flagText(ipCcP) + ' ' : '') + entry.ip) : ' 🔒') + ' | ' + user.username;
 				if (enableVless) {
 					links.push('vless://' + (user.uuid || '') + '@' + ip + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&encryption=none&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
 				}
@@ -12221,10 +12306,11 @@ var lmlGhRepoCache = { at: 0, ips: null };
 async function lmlLoadGhRepo() {
 	var info = $('lmlGhRepoInfo'), box = $('lmlGhRepoList'), btn = $('btnGhRepoAdd');
 	if (!info || !box || !btn) return;
+	var ghCount = 0;
 	try {
-		var fresh = (lmlGhRepoCache.ips !== null && (Date.now() - lmlGhRepoCache.at) < 300000);
+		var fresh = (lmlGhRepoCache.ips !== null && (Date.now() - lmlGhRepoCache.at) < 60000);
 		if (!fresh) {
-			info.textContent = 'در حال دریافت مخزن از گیت‌هاب...';
+			info.textContent = 'در حال دریافت مخزن LML...';
 			var res = await fetch(LML_GH_REPO_URL + '?t=' + Date.now(), { cache: 'no-store' });
 			if (!res.ok) throw new Error('HTTP ' + res.status);
 			var data = await res.json().catch(function () { return null; });
@@ -12241,25 +12327,46 @@ async function lmlLoadGhRepo() {
 			lmlGhRepoCache = { at: Date.now(), ips: ips };
 		}
 		var list = lmlGhRepoCache.ips || [];
+		ghCount = list.length;
 		if (!list.length) {
-			info.textContent = 'مخزن گیت‌هاب خالی است — فایل live-ips.json را در مخزن ویرایش کنید تا آی‌پی‌ها اینجا نمایش داده شوند.';
+			info.textContent = 'مخزن LML خالی است — فایل live-ips.json را در مخزن رسمی ویرایش کنید تا آی‌پی‌ها زنده اینجا ظاهر شوند.';
 			box.innerHTML = '';
-			btn.disabled = true;
-			return;
+		} else {
+			info.textContent = list.length + ' آی‌پی در مخزن رسمی LML (زنده) — انتخاب کنید و با دکمه زیر به فرم کاربر اضافه کنید:';
+			box.innerHTML = list.map(function (ip) {
+				return '<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer"><input type="checkbox" class="lml-gh-ip" value="' + attr(ip) + '" checked><span class="mono" dir="ltr">' + esc(ip) + '</span></label>';
+			}).join('');
 		}
-		info.textContent = list.length + ' آی‌پی در مخزن گیت‌هاب — انتخاب کنید و با دکمه زیر به فرم کاربر اضافه کنید:';
-		box.innerHTML = list.map(function (ip) {
-			return '<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer"><input type="checkbox" class="lml-gh-ip" value="' + attr(ip) + '" checked><span class="mono" dir="ltr">' + esc(ip) + '</span></label>';
-		}).join('');
-		btn.disabled = false;
 	} catch (e) {
 		info.textContent = 'دریافت مخزن ناموفق بود: ' + (e && e.message ? e.message : e);
 		box.innerHTML = '';
-		btn.disabled = true;
 	}
+	var poolCount = 0;
+	try {
+		var pinfo = $('lmlPoolInfo'), pbox = $('lmlPoolList');
+		var pres = await api('/api/ip-pool');
+		var pd = await pres.json().catch(function () { return {}; });
+		var plist = (pd && Array.isArray(pd.ips)) ? pd.ips : [];
+		poolCount = plist.length;
+		if (pbox) {
+			if (!plist.length) {
+				if (pinfo) pinfo.textContent = 'هنوز آی‌پی تأییدشده‌ای نیست — با تست شدن آی‌پی‌ها (خودکار هنگام ذخیره کاربر یا دکمهٔ تست) اینجا پر می‌شود.';
+				pbox.innerHTML = '';
+			} else {
+				if (pinfo) pinfo.textContent = plist.length + ' آی‌پی تأییدشده با تست واقعی TLS (پرچم = کشور ثبت‌شدهٔ آی‌پی):';
+				pbox.innerHTML = plist.map(function (it) {
+					return '<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer"><input type="checkbox" class="lml-pool-ip" value="' + attr(it.ip) + '"><span>' + (it.cc ? flagText(it.cc) + ' ' : '✅ ') + '</span><span class="mono" dir="ltr">' + esc(it.ip) + '</span></label>';
+				}).join('');
+			}
+		}
+	} catch (e2) {
+		var pinfo2 = $('lmlPoolInfo');
+		if (pinfo2) pinfo2.textContent = 'استخر آی‌پی‌های تأییدشده در دسترس نیست.';
+	}
+	btn.disabled = !(ghCount > 0 || poolCount > 0);
 }
 function lmlAddGhRepoIps() {
-	var checked = $$('.lml-gh-ip').filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
+	var checked = $$('.lml-gh-ip').concat($$('.lml-pool-ip')).filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
 	if (!checked.length) { toast('هیچ آی‌پی‌ای از مخزن انتخاب نشده است.', 'warn'); return; }
 	var NL = String.fromCharCode(10);
 	var cur = (($('fIps') && $('fIps').value) || '').split(NL).map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
@@ -12268,7 +12375,7 @@ function lmlAddGhRepoIps() {
 	if ($('fIps')) $('fIps').value = cur.join(NL);
 	closeModal('modalIps');
 	openModal('modalUser');
-	if (added > 0) toast('✅ ' + added + ' آی‌پی از مخزن گیت‌هاب به فرم اضافه شد — کاربر را ذخیره کنید.', 'ok');
+	if (added > 0) toast('✅ ' + added + ' آی‌پی از مخزن LML به فرم اضافه شد — کاربر را ذخیره کنید.', 'ok');
 	else toast('این آی‌پی‌ها از قبل در فرم کاربر بودند.', 'ok');
 }
 on($('btnGhRepoAdd'), 'click', lmlAddGhRepoIps);
@@ -14115,7 +14222,7 @@ on($('btnFilterIps'), 'click', function () { lmlFilterIpsNow(); });
    آی‌پی‌های مردود از فیلد حذف و در DB نشان‌گذاری می‌شوند تا
    خودکار از کانفیگ‌ها کنار بمانند ⇒ بدون خطای SSL/CCL
    ============================================================ */
-async function lmlTestIpsNow() {
+async function lmlTestIpsNow(isAuto) {
 	var st = $('sslTestStatus');
 	var raw = ($('fIps') && $('fIps').value) || '';
 	var ips = raw.replace(/[^0-9.]/g, ' ').split(' ').filter(function (x) {
@@ -14123,10 +14230,10 @@ async function lmlTestIpsNow() {
 	});
 	var uniq = [];
 	ips.forEach(function (x) { if (uniq.indexOf(x) < 0) uniq.push(x); });
-	if (!uniq.length) { toast('آی‌پی‌ای وارد نشده است.', 'warn'); return; }
+	if (!uniq.length) { if (!isAuto) toast('آی‌پی‌ای وارد نشده است.', 'warn'); return; }
 	var btn = $('btnTestIps');
 	if (btn) { btn.disabled = true; btn.textContent = 'در حال تست...'; }
-	if (st) { st.style.display = ''; st.textContent = '⏳ در حال تست ' + uniq.length + ' آی‌پی با handshake واقعی TLS از سمت ورکر...'; }
+	if (st) { st.style.display = ''; st.textContent = '⏳ تست خودکار ' + uniq.length + ' آی‌پی (handshake واقعی TLS + پرچم کشور)...'; }
 	try {
 		var res = await api('/api/test-ips', { method: 'POST', body: { ips: uniq, port: 443 } });
 		var d = await res.json().catch(function () { return {}; });
@@ -14140,7 +14247,7 @@ async function lmlTestIpsNow() {
 			d.results.forEach(function (r) {
 				var div = document.createElement('div');
 				div.style.cssText = 'padding:2px 0;direction:rtl;text-align:right';
-				div.textContent = (r.ok ? '✅ ' : '❌ ') + r.ip + ' — ' + r.reason + (r.ms ? ' (' + r.ms + 'ms)' : '');
+				div.textContent = (r.ok ? '✅ ' : '❌ ') + (r.cc ? flagText(r.cc) + ' ' : '') + r.ip + ' — ' + r.reason + (r.ms ? ' (' + r.ms + 'ms)' : '');
 				st.appendChild(div);
 			});
 		}
@@ -14155,7 +14262,20 @@ async function lmlTestIpsNow() {
 	}
 }
 on($('btnTestIps'), 'click', function () { lmlTestIpsNow(); });
-window.lmlTestIpsNow = lmlTestIpsNow;/* Draws the outcome of an update check into every place it can be seen, so
+window.lmlTestIpsNow = lmlTestIpsNow;
+/* تست خودکار: وقتی آی‌پی وارد/ویرایش شد، بدون زدن دکمه تست می‌شود */
+var lmlAutoTestTimer = null;
+var lmlLastAutoTestedVal = null;
+function lmlScheduleIpAutoTest() {
+	if (lmlAutoTestTimer) clearTimeout(lmlAutoTestTimer);
+	lmlAutoTestTimer = setTimeout(function () {
+		var v = (($('fIps') && $('fIps').value) || '').trim();
+		if (!v || v === lmlLastAutoTestedVal) return;
+		lmlLastAutoTestedVal = v;
+		lmlTestIpsNow(true);
+	}, 900);
+}
+if ($('fIps')) { on($('fIps'), 'blur', lmlScheduleIpAutoTest); on($('fIps'), 'change', lmlScheduleIpAutoTest); }/* Draws the outcome of an update check into every place it can be seen, so
    the answer shows up wherever the button was pressed instead of only as a
    toast that disappears. */
 function renderUpdateState(info) {
