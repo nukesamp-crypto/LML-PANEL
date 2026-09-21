@@ -160,3 +160,34 @@ LML PANEL یک پنل وب فارسی برای مدیریت کاربران و س
 ⭐ اگر پروژه برای شما مفید است، می‌توانید با دادن Star از آن حمایت کنید.
 
 </div>
+
+
+---
+
+## 📝 v1.0.0 (Custom Build) — Update Notes
+
+**Why this update?** This build fixes the long-standing issue where admin-entered IPs never appeared in generated configs, removes the Cloudflare-range restriction entirely, and makes updates come from this GitHub repository only — always with admin confirmation.
+
+### 🐛 Fixed
+- **User IPs never appeared in configs** — Auto IP-rotation (enabled by default) was *replacing* the admin's own clean IPs with random ones in all three config generators (subscription `/sub/`, panel "Copy Configs", status page). Own IPs now always come **first**; rotation and live-repo IPs are only appended.
+- **"Copy Configs" copied the subscription link instead of the configs** — an undeclared variable assignment under `"use strict"` threw a `ReferenceError` inside the config builder; the error was silently swallowed by the copy fallback. Fixed.
+- **Multi-IP users got no IP configs in the panel** — a newline-escaping bug (`split` on a literal backslash-n instead of real newlines) emptied `ips_valid` whenever a user had more than one IP. Fixed.
+- **Edit form pollution** — the users API returned rotated random IPs in the `ips` field, so editing a user displayed (and then permanently saved) IPs the admin never entered. The form now shows the stored IPs.
+
+### 🔓 Changed
+- **Cloudflare-range restriction removed** — every IP the admin enters is accepted: no range validation, no rejections, no error messages (in the IP filter, `/api/scan-ips`, and the panel button, which is now a local "tidy IPs" action).
+- **New config family: IP + TLS** — for every user IP the panel now emits TLS links on 443/2053/… with `sni=<panel domain>` and `allowInsecure=1`, so clients never hit SSL/CCL certificate errors, even with non-Cloudflare IPs. Domain+TLS and IP+plain-HTTP families are kept.
+- **Updates: GitHub-only + confirmation** — the update source is this repository (`worker.js`); the old external fallback was removed, and updates are never applied silently: the admin is always asked first.
+- **Login page redesigned** to match the in-panel design system (glassmorphism card, Vazirmatn font, aurora background, accent gradients).
+
+### ✨ Added
+- **Live IP repository (`live-ips.json`)** — edit this file right here on GitHub:
+  ```json
+  { "enabled": true, "ips": ["1.2.3.4", "5.6.7.8"] }
+  ```
+  Those IPs are appended to **every user's configs within ~5 minutes — no redeploy needed**. Network failures never throw; results are cached and refreshed in the background.
+
+### ⚡ Performance
+- Removed a blocking Cloudflare-ranges fetch from **every subscription request**.
+- Proxy country lookups are cached for 24 h (previously a network round-trip per proxy, per request).
+- Live-IP refresh runs in the background after the first fetch; "Restart core" clears all new caches.
