@@ -361,7 +361,8 @@ async function lmlAutoTestIps(ipsList, env, hostName) {
    دریافت کرده، آی‌پی‌ها را استخراج و به «مخزن آی‌پی LML»
    اضافه می‌کند (زنده، کش ۱۰ دقیقه، بدون خطا، بدون نام ثالث).
    ============================================================ */
-const LML_REPO_JSON_URL = "https://raw.githubusercontent.com/" + UPDATE_REPO_WORKER + "/main/live-ips.json";
+/* lazy getter — UPDATE_REPO_WORKER بعد از این خط تعریف می‌شود؛ تابع hoisted است و خطای TDZ نمی‌دهد */
+function lmlRepoJsonUrl() { return "https://raw.githubusercontent.com/" + UPDATE_REPO_WORKER + "/main/live-ips.json"; }
 let LML_REPO_IPS_MEM = { at: 0, ips: null };
 let LML_EXT_IPS_MEM = { at: 0, url: "", ips: null };
 function lmlParseIpsFromSub(text) {
@@ -415,7 +416,7 @@ async function lmlGetRepoIps() {
 	try {
 		const now = Date.now();
 		if (LML_REPO_IPS_MEM.ips !== null && (now - LML_REPO_IPS_MEM.at) < 300000) return LML_REPO_IPS_MEM.ips;
-		const txt = await lmlFetchUrlText(LML_REPO_JSON_URL + "?t=" + now, 6000);
+		const txt = await lmlFetchUrlText(lmlRepoJsonUrl() + "?t=" + now, 6000);
 		let ips = [];
 		try {
 			const j = JSON.parse(txt);
