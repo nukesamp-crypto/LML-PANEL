@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.3";
+const LML_PANEL_VERSION = "1.0.4";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -465,24 +465,43 @@ const LML_SOCKS_SOURCES = [
 	"https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks5.txt"
 ];
 let LML_GLOBAL_IPS_MEM = { at: 0, ips: null };
-let LML_SOCKS_MEM = { at: 0, list: null, alive: null };
+let LML_SOCKS_MEM = { at: 0, srcAt: 0, list: null, alive: null };
 async function lmlGetGlobalRepoIps() {
 	try {
 		const now = Date.now();
-		if (LML_GLOBAL_IPS_MEM.ips !== null && (now - LML_GLOBAL_IPS_MEM.at) < 21600000) return LML_GLOBAL_IPS_MEM.ips;
+		if (LML_GLOBAL_IPS_MEM.ips !== null && (now - LML_GLOBAL_IPS_MEM.at) < 1800000) return LML_GLOBAL_IPS_MEM.ips;
 		try { await lmlCfRangesRefresh(); } catch (e) { }
 		const out = [];
 		const seen = {};
+		const n2ip = function (n) { return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join("."); };
+		const pushIp = function (f) {
+			if (!f || seen[f] || out.length >= 100) return;
+			if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(f)) return;
+			seen[f] = 1;
+			if (lmlIpInCf(f)) out.push(f);
+		};
 		for (const srcUrl of LML_GLOBAL_IP_SOURCES) {
 			const txt = await lmlFetchUrlText(srcUrl, 6000);
 			const found = String(txt).match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g) || [];
-			for (const f of found) {
-				if (seen[f]) continue;
-				seen[f] = 1;
-				if (lmlIpInCf(f) && out.length < 60) out.push(f);
-			}
+			for (const f of found) pushIp(f);
 			if (out.length >= 60) break;
 		}
+		/* مولد داخلی از رنج‌های رسمی کلودفلر — مخزن جهانی هرگز خالی نمی‌ماند */
+		try {
+			const ranges = (LML_CF_RANGE_CACHE.list && LML_CF_RANGE_CACHE.list.length) ? LML_CF_RANGE_CACHE.list : LML_CF_RANGES;
+			let guard = 0;
+			while (out.length < 100 && guard < 800) {
+				guard++;
+				const cidr = String(ranges[Math.floor(Math.random() * ranges.length)] || "");
+				const parts = cidr.split("/");
+				const base = lmlIpToInt4(parts[0]);
+				const bits = parseInt(parts[1], 10);
+				if (base < 0 || !(bits >= 8 && bits <= 30)) continue;
+				const span = Math.pow(2, 32 - bits);
+				const off = 1 + Math.floor(Math.random() * (span - 2));
+				pushIp(n2ip((base + off) >>> 0));
+			}
+		} catch (e) { }
 		LML_GLOBAL_IPS_MEM = { at: now, ips: out };
 		return out;
 	} catch (e) { return (LML_GLOBAL_IPS_MEM.ips || []); }
@@ -520,32 +539,48 @@ async function lmlSocksAlive(hostport, timeoutMs) {
 		return null;
 	} finally { try { if (sock) sock.close(); } catch (e) { } }
 }
-async function lmlGetSocksRepo() {
+async function lmlGetSocksRepo(force) {
 	try {
 		const now = Date.now();
-		if (LML_SOCKS_MEM.alive && (now - LML_SOCKS_MEM.at) < 600000) return { success: true, proxies: LML_SOCKS_MEM.alive, cached: true };
+		if (!force && LML_SOCKS_MEM.alive && (now - LML_SOCKS_MEM.at) < 180000) return { success: true, proxies: LML_SOCKS_MEM.alive, cached: true };
 		let cands = LML_SOCKS_MEM.list;
-		if (!cands || (now - LML_SOCKS_MEM.at) >= 600000) {
+		if (!cands || !cands.length || (now - (LML_SOCKS_MEM.srcAt || 0)) >= 600000) {
 			cands = [];
 			const seen = {};
 			for (const srcUrl of LML_SOCKS_SOURCES) {
 				const txt = await lmlFetchUrlText(srcUrl, 6000);
 				const found = String(txt).split(/\r?\n/).map(function (x) { return x.trim(); }).filter(function (x) { return /^\d{1,3}(\.\d{1,3}){3}:\d{2,5}$/.test(x); });
-				for (const f of found) { if (!seen[f] && cands.length < 120) { seen[f] = 1; cands.push(f); } }
-				if (cands.length >= 120) break;
+				for (const f of found) { if (!seen[f] && cands.length < 300) { seen[f] = 1; cands.push(f); } }
 			}
+			LML_SOCKS_MEM.srcAt = now;
 		}
-		const test = cands.slice(0, 48);
+		/* انتخاب درهم‌ریخته + پنجرهٔ چرخشی: هر رفرش مجموعهٔ تازه‌ای تست می‌شود */
 		const alive = [];
-		for (let i = 0; i < test.length; i += 12) {
-			const rs = await Promise.all(test.slice(i, i + 12).map(function (hp) { return lmlSocksAlive(hp, 2200); }));
-			rs.forEach(function (r) { if (r) alive.push(r); });
-			if (alive.length >= 24) break;
+		const triedHp = {};
+		let testedCount = 0;
+		let attempts = 0;
+		while (alive.length < 6 && attempts < 2) {
+			attempts++;
+			const shuffled = cands.slice();
+			for (let s = shuffled.length - 1; s > 0; s--) {
+				const j = Math.floor(Math.random() * (s + 1));
+				const tmp = shuffled[s]; shuffled[s] = shuffled[j]; shuffled[j] = tmp;
+			}
+			const test = shuffled.filter(function (hp) { return !triedHp[hp]; }).slice(0, 60);
+			if (!test.length) break;
+			test.forEach(function (hp) { triedHp[hp] = 1; });
+			testedCount += test.length;
+			for (let i = 0; i < test.length; i += 15) {
+				const rs = await Promise.all(test.slice(i, i + 15).map(function (hp) { return lmlSocksAlive(hp, 2000); }));
+				rs.forEach(function (r) { if (r) alive.push(r); });
+				if (alive.length >= 20) break;
+			}
+			if (alive.length >= 20) break;
 		}
 		alive.sort(function (a, b) { return a.ms - b.ms; });
 		const out = alive.slice(0, 24);
-		LML_SOCKS_MEM = { at: now, list: cands, alive: out };
-		return { success: true, proxies: out, cached: false, tested: test.length };
+		LML_SOCKS_MEM = { at: now, srcAt: LML_SOCKS_MEM.srcAt || now, list: cands, alive: out };
+		return { success: true, proxies: out, cached: false, tested: testedCount };
 	} catch (e) {
 		return { success: false, proxies: (LML_SOCKS_MEM.alive || []) };
 	}
@@ -1334,7 +1369,7 @@ export default {
 				return await Router.handleResellerPortal(request, env);
 			}
 			if (url.pathname === "/panel" || url.pathname === "/login") {
-				return await Router.handlePanel(request, env);
+				return await Router.handlePanel(request, env, ctx);
 			}
 			if (url.pathname.startsWith("/status/")) {
 				return await Router.handleUserStatus(request, url, env, ctx);
@@ -1531,7 +1566,7 @@ const Router = {
 			},
 		});
 	},
-	async handlePanel(request, env) {
+	async handlePanel(request, env, ctx) {
 		const hasPassword = await DbService.getPanelPassword(env.DB);
 		let gfxSetting = 'false';
 			try {
@@ -1550,19 +1585,27 @@ const Router = {
 				headers: { "Content-Type": "text/html; charset=utf-8" },
 			});
 		}
+		/* کش لبهٔ کلودفلر برای HTML پنل — کلید: دامنه + gfx + نسخه ⇒ بارگذاری فوری */
+		let panelCache = null, panelCacheKey = null;
+		try {
+			panelCache = caches.default;
+			panelCacheKey = new Request("https://lml-edge.internal/panel/" + encodeURIComponent(new URL(request.url).hostname) + "/" + gfxSetting + "/" + LML_PANEL_VERSION);
+			const hit = await panelCache.match(panelCacheKey);
+			if (hit) return hit;
+		} catch (e) { panelCache = null; }
 		let lmlPanelHtml = HTML_TEMPLATES.panel.replace(/\/\*\{\{GFX_SETTING\}\}\*\//g, gfxSetting);
 		try {
 			const lmlHostHtml = await lmlPanelHostResolve(env, new URL(request.url).hostname);
 			lmlPanelHtml = lmlPanelHtml.replace("</head>", '<script>window.LML_PANEL_HOST=' + JSON.stringify(lmlHostHtml) + ';</script>\n</head>');
 		} catch (e) { }
-		return new Response(lmlPanelHtml, {
+		const panelResp = new Response(lmlPanelHtml, {
 			headers: {
 				"Content-Type": "text/html; charset=utf-8",
-				"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-				Pragma: "no-cache",
-				Expires: "0",
+				"Cache-Control": "public, s-maxage=180",
 			},
 		});
+		try { if (panelCache && panelCacheKey) safeWaitUntil(ctx, panelCache.put(panelCacheKey, panelResp.clone())); } catch (e) { }
+		return panelResp;
 	},
 	async handleUserStatus(request, url, env, ctx) {
 		const username = safeDecodeURI(url.pathname.slice(8));
@@ -2300,7 +2343,7 @@ const Router = {
 			try {
 				const session = await DbService.getSession(request, env);
 				if (!session) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const socksData = await lmlGetSocksRepo();
+				const socksData = await lmlGetSocksRepo(url.searchParams.get("force") === "1");
 				return new Response(JSON.stringify(socksData), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 			} catch (e) {
 				return new Response(JSON.stringify({ success: false, proxies: [] }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
@@ -3117,7 +3160,7 @@ const Router = {
 					success: true,
 					current: LML_PANEL_VERSION,
 					latest: latest,
-					has_update: cmp > 0,
+					has_update: cmp !== 0,
 					source_ok: LML_UPDATE_CHECK_CACHE.source,
 					size: LML_UPDATE_CHECK_CACHE.size
 				}), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
@@ -10241,7 +10284,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.3';
+var CURRENT_VERSION = '1.0.4';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -12700,13 +12743,13 @@ window.lmlAddGhRepoIps = lmlAddGhRepoIps;
 /* ============================================================
    مخزن ساکس پروکسی جهانی — تست زندهٔ handshake، سریع‌ترین اول
    ============================================================ */
-async function lmlLoadSocksRepo() {
+async function lmlLoadSocksRepo(force) {
 	var info = $('socksRepoInfo'), box = $('socksRepoList'), btn = $('btnSocksRefresh');
 	if (btn) btn.disabled = true;
 	if (info) info.textContent = '⏳ در حال دریافت از منابع بزرگ جهانی و تست زندهٔ handshake (تا ~۲۰ ثانیه)...';
 	if (box) box.innerHTML = '';
 	try {
-		var res = await api('/api/socks-repo');
+		var res = await api('/api/socks-repo' + (force ? '?force=1' : ''));
 		var d = await res.json().catch(function () { return {}; });
 		var list = (d && Array.isArray(d.proxies)) ? d.proxies : [];
 		if (!list.length) {
@@ -12728,7 +12771,7 @@ async function lmlLoadSocksRepo() {
 		if (b2) b2.disabled = false;
 	}
 }
-on($('btnSocksRefresh'), 'click', lmlLoadSocksRepo);
+on($('btnSocksRefresh'), 'click', function () { lmlLoadSocksRepo(true); });
 on($('btnSocksRepo'), 'click', function () {
 	openModal('modalSocksRepo');
 	var b = $('socksRepoList');
@@ -14525,7 +14568,7 @@ async function promptUpdate(latest) {
 	if (LML_UPDATE_PROMPT_VER === latest && (now - LML_UPDATE_PROMPT_AT) < 6 * 3600 * 1000) return false;
 	LML_UPDATE_PROMPT_AT = now;
 	LML_UPDATE_PROMPT_VER = latest;
-	var ok = await confirmBox('نسخه جدید ' + latest + ' روی گیت‌هاب منتشر شده. می‌خوای اپدیت کنم؟',
+	var ok = await confirmBox('نسخهٔ ' + latest + ' روی مخزن گیت‌هاب موجود است (نسخهٔ فعلی پنل: ' + CURRENT_VERSION + '). آپدیت انجام شود؟ (به نسخه بالاتر یا پایین‌تر)',
 		{ title: 'اپدیت خودکار از گیت‌هاب', okText: 'بله، اپدیت کن', cancelText: 'بعداً' });
 	if (!ok) return false;
 	return await applyPanelUpdate();
