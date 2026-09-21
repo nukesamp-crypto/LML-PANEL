@@ -11,6 +11,200 @@ function safeWaitUntil(ctx, promise) {
 		promise.catch(() => {});
 	}
 }
+
+const LML_PANEL_VERSION = "1.0.7";
+let LML_UPDATE_CHECK_CACHE = null;
+function lmlVersionCompare(a, b) {
+	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
+	const nb = String(b || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
+	for (let i = 0; i < Math.max(na.length, nb.length); i++) {
+		const x = na[i] || 0, y = nb[i] || 0;
+		if (x > y) return 1;
+		if (x < y) return -1;
+	}
+	return 0;
+}
+
+/* ============================================================
+   LML v1.0.6 (IP-FREE) — «آی‌پی کاربر مستقیم وارد کانفیگ می‌شود»
+   ------------------------------------------------------------
+     ۱) آی‌پی‌های کاربر بدون هیچ بررسی رنج کلودفلر پذیرفته می‌شوند
+        و هرگز حذف یا رد نمی‌شوند (بدون خطا).
+     ۲) لینک TLS با آی‌پی: آدرس = آی‌پی کاربر، پورت = 443/2053/...،
+        SNI و Host = دامنه‌ی پنل، allowInsecure=1
+        ⇒ گواهی هرگز باعث خطای SSL/CCL نمی‌شود.
+     ۳) لینک دامنه + TLS (گواهی معتبر) و لینک آی‌پی + پورت HTTP
+        بدون TLS هم مثل قبل ساخته می‌شوند.
+
+   نتیجه: هر آی‌پی که کاربر بنویسد، همان آی‌پی در کانفیگ‌ها می‌آید.
+   ============================================================ */
+const LML_CF_RANGES = [
+	"173.245.48.0/20",
+	"103.21.244.0/22",
+	"103.22.200.0/22",
+	"103.31.4.0/22",
+	"141.101.64.0/18",
+	"108.162.192.0/18",
+	"190.93.240.0/20",
+	"188.114.96.0/20",
+	"197.234.240.0/22",
+	"198.41.128.0/17",
+	"162.158.0.0/15",
+	"104.16.0.0/13",
+	"104.24.0.0/14",
+	"172.64.0.0/13",
+	"131.0.72.0/22"
+];
+const LML_HTTP_PORT_OF = { "443": "80", "2053": "2052", "2083": "2082", "2087": "2086", "2096": "2095", "8443": "8080" };
+const LML_HTTP_PORTS = ["80", "2052", "2082", "2086", "2095", "8080", "8880"];
+const LML_CLEAN_SEED_IPS = ["104.16.132.229",
+	"104.16.133.229",
+	"104.17.0.1",
+	"104.17.1.1",
+	"104.18.0.1",
+	"104.19.0.1",
+	"104.20.0.1",
+	"104.21.0.1",
+	"104.21.14.1",
+	"104.22.0.1",
+	"104.23.0.1",
+	"104.24.0.1"];
+const LML_CF_RANGE_CACHE = { at: 0, list: null };
+
+function lmlIsIpHost(h) {
+	const v = String(h || "").trim();
+	if (!v) return false;
+	if (/^\d{1,3}(\.\d{1,3}){3}$/.test(v)) return true;
+	if (v.indexOf(":") >= 0 && /^[0-9a-fA-F:]+$/.test(v)) return true;
+	return false;
+}
+function lmlIpToInt4(ip) {
+	const p = String(ip).split(".");
+	if (p.length !== 4) return -1;
+	let n = 0;
+	for (let i = 0; i < 4; i++) {
+		const v = parseInt(p[i], 10);
+		if (!(v >= 0 && v <= 255)) return -1;
+		n = (n * 256) + v;
+	}
+	return n;
+}
+function lmlCidrHas(cidr, ipInt) {
+	const parts = String(cidr).split("/");
+	if (parts.length !== 2) return false;
+	const base = lmlIpToInt4(parts[0]);
+	const bits = parseInt(parts[1], 10);
+	if (base < 0 || !(bits >= 0 && bits <= 32)) return false;
+	const mask = bits === 0 ? 0 : ((0xFFFFFFFF << (32 - bits)) >>> 0);
+	return ((ipInt & mask) >>> 0) === ((base & mask) >>> 0);
+}
+/* v1.0.6-IPFREE: بررسی رنج غیرفعال شد — فقط برای سازگاری نگه داشته شده */
+function lmlIpInCf(ip) {
+	const n = lmlIpToInt4(ip);
+	if (n < 0) return false;
+	const list = (LML_CF_RANGE_CACHE.list && LML_CF_RANGE_CACHE.list.length) ? LML_CF_RANGE_CACHE.list : LML_CF_RANGES;
+	for (let i = 0; i < list.length; i++) if (lmlCidrHas(list[i], n)) return true;
+	return false;
+}
+/* فهرست تازه‌ی رنج‌های کلودفلر (کش ۲۴ ساعته؛ خطا هیچ‌وقت کار را متوقف نمی‌کند) */
+async function lmlCfRangesRefresh() {
+	const now = Date.now();
+	if (LML_CF_RANGE_CACHE.at && (now - LML_CF_RANGE_CACHE.at) < 86400000) return LML_CF_RANGE_CACHE.list || LML_CF_RANGES;
+	try {
+		const r = await fetch("https://api.cloudflare.com/client/v4/ips", { headers: { "User-Agent": "Mozilla/5.0" } });
+		const j = await r.json();
+		const v4 = (j && j.result && j.result.ipv4_cidrs) ? j.result.ipv4_cidrs.filter(function (x) { return String(x).indexOf(":") < 0; }) : [];
+		if (v4.length) LML_CF_RANGE_CACHE.list = v4;
+	} catch (e) { }
+	LML_CF_RANGE_CACHE.at = now;
+	return LML_CF_RANGE_CACHE.list || LML_CF_RANGES;
+}
+function lmlOnlyCfIps(list, limit) {
+	const out = [];
+	const seen = {};
+	(list || []).forEach(function (raw) {
+		const ip = String(raw || "").trim();
+		if (!ip || seen[ip] || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return;
+		seen[ip] = 1;
+		/* IP-FREE: بدون بررسی رنج کلودفلر — همه‌ی آی‌پی‌ها پذیرفته می‌شوند */
+		out.push(ip);
+	});
+	return (limit && out.length > limit) ? out.slice(0, limit) : out;
+}
+function lmlHttpTwin(port) {
+	const p = String(port || "").trim();
+	if (LML_HTTP_PORT_OF[p]) return LML_HTTP_PORT_OF[p];
+	if (LML_HTTP_PORTS.indexOf(p) >= 0) return p;
+	return "80";
+}
+/* دامنه‌ی واقعی پنل: هرگز آی‌پی نمی‌شود (منبع خطای SSL در مرورگر همین بود) */
+let LML_PANEL_HOST_CACHE = "";
+async function lmlPanelHostSave(env, host) {
+	const h = String(host || "").trim().toLowerCase();
+	if (!h || lmlIsIpHost(h)) return;
+	if (LML_PANEL_HOST_CACHE === h) return;
+	LML_PANEL_HOST_CACHE = h;
+	try { await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lml_panel_host', ?)").bind(h).run(); } catch (e) { }
+}
+async function lmlPanelHostResolve(env, host) {
+	const h = String(host || "").trim().toLowerCase();
+	if (h && !lmlIsIpHost(h)) {
+		if (env) { try { await lmlPanelHostSave(env, h); } catch (e) { } }
+		return h;
+	}
+	if (LML_PANEL_HOST_CACHE && !lmlIsIpHost(LML_PANEL_HOST_CACHE)) return LML_PANEL_HOST_CACHE;
+	if (env) {
+		try {
+			const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_panel_host'").first();
+			if (row && row.value && !lmlIsIpHost(row.value)) { LML_PANEL_HOST_CACHE = String(row.value); return LML_PANEL_HOST_CACHE; }
+		} catch (e) { }
+		try {
+			const sb = await env.DB.prepare("SELECT value FROM settings WHERE key = 'sub_base'").first();
+			const m = sb && sb.value ? String(sb.value).match(/^https?:\/\/([^\/]+)/i) : null;
+			if (m && m[1] && !lmlIsIpHost(m[1])) { LML_PANEL_HOST_CACHE = m[1].toLowerCase(); return LML_PANEL_HOST_CACHE; }
+		} catch (e) { }
+	}
+	return h || "workers.dev";
+}
+
+const LML_COLO_CC = {
+	"IAD":"US", "EWR":"US", "JFK":"US", "LGA":"US", "ORD":"US", "ATL":"US", "MIA":"US", "DFW":"US",
+	"IAH":"US", "LAX":"US", "SJC":"US", "SFO":"US", "SEA":"US", "DEN":"US", "BOS":"US", "PDX":"US",
+	"PHX":"US", "DTL":"US", "MSP":"US", "CLT":"US", "LAS":"US", "MCI":"US", "BNA":"US", "SLC":"US",
+	"SAN":"US", "CLE":"US", "PIT":"US", "RDU":"US", "TPA":"US", "STL":"US", "YYZ":"CA", "YUL":"CA",
+	"YVR":"CA", "YYC":"CA", "YOW":"CA", "YWG":"CA", "LHR":"GB", "MAN":"GB", "EDI":"GB", "FRA":"DE",
+	"HAM":"DE", "MUC":"DE", "DUS":"DE", "BER":"DE", "AMS":"NL", "CDG":"FR", "MRS":"FR", "LYS":"FR",
+	"HEL":"FI", "ARN":"SE", "OSL":"NO", "CPH":"DK", "WAW":"PL", "VIE":"AT", "ZRH":"CH", "GVA":"CH",
+	"MXP":"IT", "FCO":"IT", "MAD":"ES", "BCN":"ES", "LIS":"PT", "IST":"TR", "ADB":"TR", "DXB":"AE",
+	"AUH":"AE", "BAH":"BH", "DOH":"QA", "RUH":"SA", "JED":"SA", "DMM":"SA", "KWI":"KW", "MCT":"OM",
+	"AMM":"JO", "TLV":"IL", "CAI":"EG", "ATH":"GR", "OTP":"RO", "SOF":"BG", "PRG":"CZ", "BUD":"HU",
+	"BEG":"RS", "ZAG":"HR", "KBP":"UA", "TBS":"GE", "EVN":"AM", "GYD":"AZ", "ALA":"KZ", "NQZ":"KZ",
+	"BOM":"IN", "DEL":"IN", "MAA":"IN", "BLR":"IN", "HYD":"IN", "CCU":"IN", "KHI":"PK", "LHE":"PK",
+	"ISB":"PK", "SIN":"SG", "NRT":"JP", "KIX":"JP", "FUK":"JP", "ICN":"KR", "HKG":"HK", "TPE":"TW",
+	"BKK":"TH", "KUL":"MY", "CGK":"ID", "MNL":"PH", "CEB":"PH", "HAN":"VN", "SGN":"VN", "SYD":"AU",
+	"MEL":"AU", "BNE":"AU", "PER":"AU", "ADL":"AU", "AKL":"NZ", "GRU":"BR", "GIG":"BR", "EZE":"AR",
+	"SCL":"CL", "MEX":"MX", "QRO":"MX", "JNB":"ZA", "CPT":"ZA", "DUB":"IE", "KEF":"IS", "LUX":"LU",
+	"BRU":"BE", "TLL":"EE", "RIX":"LV", "VNO":"LT"
+};
+function lmlFlagEmoji(cc) {
+	const c = String(cc || "").toUpperCase();
+	if (!/^[A-Z]{2}$/.test(c)) return "🌐";
+	try { return String.fromCodePoint(127397 + c.charCodeAt(0), 127397 + c.charCodeAt(1)); } catch (e) { return "🌐"; }
+}
+function lmlColoCountry(colo) {
+	const c = String(colo || "").toUpperCase();
+	return LML_COLO_CC[c] || "";
+}
+
+function lmlShuffle(arr) {
+	const a = (arr || []).slice();
+	for (let i = a.length - 1; i > 0; i--) {
+		const j = Math.floor(Math.random() * (i + 1));
+		const t = a[i]; a[i] = a[j]; a[j] = t;
+	}
+	return a;
+}
+
 const GLOBAL_TRAFFIC_CACHE = new Map();
 const ACTIVE_CONNECTIONS_COUNT = new Map();
 const GLOBAL_ACTIVE_IPS = new Map();
@@ -145,6 +339,39 @@ async function updateFetchWorker(url, opts, ms) {
 	}
 }
 
+/* ============ LIVE IP REPO — تغییر زنده بدون دیپلوی مجدد ============
+   فایل live-ips.json را در همان مخزن گیت‌هاب ویرایش کنید:
+   { "enabled": true, "ips": ["1.2.3.4", "5.6.7.8"] }
+   این آی‌پی‌ها حداکثر ظرف ۵ دقیقه به کانفیگ همه‌ی کاربران اضافه می‌شوند
+   (بعد از آی‌پی‌های خود کاربر). هیچ خطایی هم هرگز نمی‌دهد. */
+const LML_LIVE_IPS_URL = "https://raw.githubusercontent.com/" + UPDATE_REPO_WORKER + "/main/live-ips.json";
+let LML_LIVE_IPS_CACHE = { at: 0, ips: null };
+async function getLiveIps(ctx) {
+	try {
+		const now = Date.now();
+		if (LML_LIVE_IPS_CACHE.ips !== null && (now - LML_LIVE_IPS_CACHE.at) < 300000) return LML_LIVE_IPS_CACHE.ips;
+		const refresh = (async () => {
+			try {
+				const r = await updateFetchWorker(LML_LIVE_IPS_URL + "?t=" + Date.now(), { headers: { "User-Agent": "Mozilla/5.0", "Cache-Control": "no-cache" } }, 4000);
+				if (r && r.ok) {
+					const j = await r.json();
+					if (j && j.enabled !== false && Array.isArray(j.ips)) {
+						LML_LIVE_IPS_CACHE = { at: Date.now(), ips: lmlOnlyCfIps(j.ips.map(function (x) { return String(x || "").trim(); }), 40) };
+					} else {
+						LML_LIVE_IPS_CACHE = { at: Date.now(), ips: [] };
+					}
+				}
+			} catch (e) { }
+		})();
+		if (LML_LIVE_IPS_CACHE.ips === null) {
+			await Promise.race([refresh, new Promise(function (res) { setTimeout(res, 1500); })]);
+		} else {
+			safeWaitUntil(ctx, refresh);
+		}
+		return LML_LIVE_IPS_CACHE.ips || [];
+	} catch (e) { return []; }
+}
+
 /* Ask GitHub which .js files the repo really has, so a renamed worker file
    can never break the auto-updater. Never throws. */
 async function discoverUpdateFilesWorker(branch) {
@@ -232,32 +459,18 @@ async function fetchUpdateSourceWorker() {
 		if (text) { updateBranchWorker = branches[i]; return text; }
 	}
 
-	/* 5. last resort */
-	try {
-		const r = await updateFetchWorker("https://hoplimit.shop/worker.js" + stamp, {}, UPDATE_TIMEOUT_MS);
-		if (r && r.ok) {
-			const t = await r.text();
-			if (t && t.length > 20000) return t;
-		}
-	} catch (e) { }
+	/* 5. منبع آپدیت فقط مخزن گیت‌هاب خودتان است — هیچ fallback دیگری وجود ندارد */
 	return null;
 }
 
-/* PROXY-ROUTE PATCH: no third-party (Zeus) repo is used any more.
-   Primary stays the panel's own data host; the fallback mirror is whatever
-   the admin sets in the worker variable LML_DATA_BASE (own repo/CDN/R2).
-   With no LML_DATA_BASE set, only the primary host is tried. */
-let LML_DATA_BASE = "";
 async function fetchWithFallback(path, options = {}) {
 	const primaryUrl = `https://hoplimit.shop/${path}`;
-	/* order: your own data host (LML_DATA_BASE) -> vendor host (last resort) */
-	if (LML_DATA_BASE) {
-		try {
-			const res = await fetch(`${LML_DATA_BASE.replace(/\/+$/, "")}/${path}`, options);
-			if (res.ok) return res;
-		} catch (e) { }
-	}
-	return await fetch(primaryUrl, options);
+	const fallbackUrl = `https://raw.githubusercontent.com/${path}`;
+	try {
+		const res = await fetch(primaryUrl, options);
+		if (res.ok) return res;
+	} catch (e) { }
+	return await fetch(fallbackUrl, options);
 }
 let localLastAutoResetCheck = 0;
 let localPortsTlsMigrated = false;
@@ -309,288 +522,27 @@ async function checkAutoResets(env, ctx) {
 		await env.DB.prepare(`UPDATE users SET used_req = 0, is_active = 1, last_reset_req_time = ? WHERE auto_reset_req_days > 0 AND ? >= (last_reset_req_time + (auto_reset_req_days * 86400000))`).bind(todayUtc, todayUtc).run();
 	} catch (e) { }
 }
+const PROXY_CC_CACHE = new Map();
 let GLOBAL_IPS_CACHE = {};
 let GLOBAL_IPS_LAST_FETCH = 0;
-/* ============================================================
-   WORLDWIDE CLEAN-IP SOURCES
-   The vendor file (ips.txt) is a single huge list with no country info.
-   These sources are added on top of it, so the pool never comes back empty
-   and the best-known addresses are always in it. Override with
-   LML_CLEAN_IP_SOURCES (one URL per line/space/comma).
-   ============================================================ */
-const LML_CLEAN_IP_SOURCES = [
-	"https://ipdb.api.030101.xyz/?type=bestcf",
-	"https://raw.githubusercontent.com/vfarid/cf-clean-ips/main/list.txt",
-	"https://raw.githubusercontent.com/vfarid/cf-clean-ips/main/list.json"
-];
-/* ---------------- LIVE IP REPOSITORY (GitHub / panel DB) ----------------
-   The list of clean IPs can be changed at any time WITHOUT touching code:
-     * panel DB (settings table)  -> admin UI or POST /api/ip-repo
-     * env vars                   -> LML_CLEAN_IP_SOURCES (hard override)
-     * built-in defaults          -> used only when the DB list is empty
-   Admin-managed sources win over the built-in defaults, so a GitHub raw
-   file (or a jsDelivr mirror) can be the single source of truth. */
-const LML_SET_KEYS = {
-	urls: "lml_clean_ip_urls",
-	inline: "lml_clean_ip_inline",
-	proxies: "lml_proxy_urls",
-	ttl: "lml_repo_ttl"
-};
-function lmlNormalizeRepoUrl(u) {
-	/* Accepts every shape a human is likely to paste:
-	   github.com/U/R/blob/main/x.txt  |  .../raw/main/x.txt  |  raw.githubusercontent.com/...
-	   gist.github.com/U/ID           |  gitlab.com/U/R/-/blob/...  |  host.tld/file.txt (no scheme) */
-	let s = String(u || "").trim().replace(/^[<"']+|[>"']+$/g, "");
-	if (!s) return "";
-	if (!/^https?:\/\//i.test(s)) {
-		if (!/^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(s)) return "";
-		s = "https://" + s;
-	}
-	if (s.indexOf("{") >= 0 || s.indexOf("}") >= 0) return s; /* keep {CC}/{cc} templates intact */
-	try {
-		const url = new URL(s);
-		const h = url.hostname.toLowerCase();
-		const p = url.pathname;
-		if (h === "github.com" || h === "www.github.com") {
-			const blob = p.match(/^\/([^/]+)\/([^/]+)\/(?:blob|raw)\/(.+)$/);
-			if (blob) return "https://raw.githubusercontent.com/" + blob[1] + "/" + blob[2] + "/" + blob[3];
-			return url.toString();
-		}
-		if (h === "gist.github.com") {
-			const g = p.match(/^\/([^/]+)\/([0-9a-fA-F]+)(?:\/raw)?/);
-			if (g) return "https://gist.githubusercontent.com/" + g[1] + "/" + g[2] + "/raw";
-			return url.toString();
-		}
-		if (h === "gitlab.com" && p.indexOf("/-/blob/") >= 0) {
-			return "https://gitlab.com" + p.replace("/-/blob/", "/-/raw/") + url.search;
-		}
-		return url.toString();
-	} catch (e) { return ""; }
-}
-function lmlSplitUrls(raw) {
-	const out = [];
-	const seen = new Set();
-	String(raw || "").split(/[\s,;]+/).forEach(function (t) {
-		const u = lmlNormalizeRepoUrl(t);
-		if (!u || u.length > 400 || seen.has(u)) return;
-		seen.add(u);
-		out.push(u);
-	});
-	return out;
-}
-async function lmlReadRepoConfig(env) {
-	const cfg = { urls: [], inline: "", proxyUrls: [], ttl: 300, srcUrls: "default", srcInline: "empty", inlineLines: 0 };
-	if (env && env.DB) {
-		try {
-			const rows = (await env.DB.prepare("SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?)")
-				.bind(LML_SET_KEYS.urls, LML_SET_KEYS.inline, LML_SET_KEYS.proxies, LML_SET_KEYS.ttl).all()).results || [];
-			const map = {};
-			rows.forEach(function (r) { map[r.key] = r.value; });
-			cfg.urls = lmlSplitUrls(map[LML_SET_KEYS.urls]);
-			cfg.inline = String(map[LML_SET_KEYS.inline] || "");
-			cfg.proxyUrls = lmlSplitUrls(map[LML_SET_KEYS.proxies]);
-			const t = parseInt(map[LML_SET_KEYS.ttl], 10);
-			if (t >= 20) cfg.ttl = Math.min(t, 86400);
-			if (cfg.urls.length) cfg.srcUrls = "db";
-		} catch (e) { }
-	}
-	const envUrls = lmlSplitUrls(env && env.LML_CLEAN_IP_SOURCES);
-	if (envUrls.length) { cfg.urls = envUrls; cfg.srcUrls = "env"; }
-	if (!cfg.urls.length) { cfg.urls = LML_CLEAN_IP_SOURCES.slice(); cfg.srcUrls = "default"; }
-	cfg.inlineLines = String(cfg.inline).split("\n").filter(function (l) { return l.trim().length > 0; }).length;
-	return cfg;
-}
-async function lmlSaveRepoConfig(env, patch) {
-	if (!env || !env.DB) throw new Error("DB در دسترس نیست");
-	const stmts = [];
-	const put = function (k, v) { stmts.push(env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").bind(k, String(v || ""))); };
-	if (typeof patch.urls === "string") put(LML_SET_KEYS.urls, lmlSplitUrls(patch.urls).slice(0, 12).join("\n"));
-	if (typeof patch.inline === "string") put(LML_SET_KEYS.inline, String(patch.inline).slice(0, 100000));
-	if (typeof patch.proxyUrls === "string") put(LML_SET_KEYS.proxies, lmlSplitUrls(patch.proxyUrls).slice(0, 12).join("\n"));
-	if (patch.ttl !== undefined) {
-		const t = Math.min(Math.max(parseInt(patch.ttl, 10) || 300, 20), 86400);
-		put(LML_SET_KEYS.ttl, t);
-	}
-	if (!stmts.length) return false;
-	await env.DB.batch(stmts);
-	LML_REPO_CACHE = { at: 0, ttl: 0, ips: [], detail: {}, source: {} };
-	return true;
-}
-/* GitHub raw / jsDelivr / gitlab: add a cache-busting token so an edit (even
-   inside the same minute) is picked up instead of a stale CDN copy. */
-function lmlFreshUrl(u, force) {
-	const h = String(u).replace(/^https?:\/\//i, "").split("/")[0].toLowerCase();
-	const isVcs = /(^|\.)(githubusercontent\.com|github\.com|jsdelivr\.net|gitlab\.com|statically\.io|codeberg\.org)$/.test(h);
-	if (!isVcs) return u;
-	const stamp = force ? Date.now() : Math.floor(Date.now() / 60000);
-	return u + (u.indexOf("?") >= 0 ? "&" : "?") + "lmlts=" + stamp;
-}
-let LML_REPO_CACHE = { at: 0, ttl: 0, ips: [], detail: {}, source: {} };
-const LML_IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
-function lmlExtractIpsFromText(text, out, seen, cap) {
-	if (!text) return out;
-	const parts = String(text).split(/[\s,;|]+/);
-	for (let i = 0; i < parts.length && out.length < cap; i++) {
-		let t = parts[i].trim().replace(/^["']|["']$/g, "");
-		if (!t || t.charAt(0) === "#") continue;
-		/* vfarid list.json entries look like {"ip":"1.2.3.4", ...} */
-		const m = t.match(/^\{?"?ip"?\s*:\s*"([^"]+)"/i);
-		if (m) t = m[1];
-		/* CIDR blocks (many GitHub IP repos publish "104.16.0.0/13") */
-		const mc = t.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
-		if (mc && typeof randomIpsFromCidr === "function") {
-			randomIpsFromCidr(t, 5).forEach(function (ip) {
-				if (!seen.has(ip) && out.length < cap) { seen.add(ip); out.push(ip); }
-			});
-			continue;
-		}
-		t = t.replace(/^https?:\/\//i, "").split("/")[0].split(":")[0];
-		if (!LML_IPV4_RE.test(t)) continue;
-		if (seen.has(t)) continue;
-		seen.add(t);
-		out.push(t);
-	}
-	return out;
-}
-function lmlUrlKey(u) {
-	/* host/file.txt (+?type=...) so two files on the same host are reported apart */
-	try {
-		const url = new URL(u);
-		const segs = url.pathname.split("/").filter(function (x) { return x; });
-		const file = segs.slice(-3).join("/");
-		let q = "";
-		const qk = url.searchParams.keys().next();
-		if (!qk.done) q = "?" + qk.value;
-		return url.hostname + (file ? "/" + file : "") + q;
-	} catch (e) {
-		return String(u).replace(/^https?:\/\//, "").slice(0, 60);
-	}
-}
-async function lmlFetchCleanIps(env, want, force) {
-	const cap = Math.min(Math.max(parseInt(want, 10) || 300, 20), 1500);
-	const cfg = await lmlReadRepoConfig(env);
-	const now = Date.now();
-	const cacheOk = !force && LML_REPO_CACHE.ips.length > 0 && (now - LML_REPO_CACHE.at) < (LML_REPO_CACHE.ttl * 1000);
-	if (cacheOk) {
-		return { ips: LML_REPO_CACHE.ips.slice(0, cap), detail: LML_REPO_CACHE.detail, cached: true, at: LML_REPO_CACHE.at, config: cfg };
-	}
-	const seen = new Set();
-	const ips = [];
-	const detail = {};
-	const source = {};
-	const urls = cfg.urls.slice(0, 12);
-	await Promise.all(urls.map(async (u) => {
-		const host = lmlUrlKey(u);
-		try {
-			const ctl = new AbortController();
-			const to = setTimeout(() => { try { ctl.abort(); } catch (e) { } }, 7000);
-			const res = await fetch(lmlFreshUrl(u, !!force), { headers: { "User-Agent": "Mozilla/5.0", "Cache-Control": "no-cache" }, signal: ctl.signal });
-			clearTimeout(to);
-			if (!res || !res.ok) { detail[host] = (detail[host] || 0); return; }
-			const before = ips.length;
-			/* a Worker has ~10ms CPU: never parse a 50MB page, take the head */
-			let body = await res.text();
-			if (body.length > 500000) body = body.slice(0, 500000);
-			lmlExtractIpsFromText(body, ips, seen, cap);
-			detail[host] = (detail[host] || 0) + (ips.length - before);
-			source[host] = cfg.srcUrls === "env" ? "env" : (cfg.srcUrls === "db" ? "panel-db" : "built-in");
-		} catch (e) { detail[host] = (detail[host] || 0); }
-	}));
-	/* the text pasted straight into the panel (no GitHub needed) */
-	if (cfg.inline && ips.length < cap) {
-		const before = ips.length;
-		lmlExtractIpsFromText(cfg.inline, ips, seen, cap);
-		detail["panel-paste"] = ips.length - before;
-		source["panel-paste"] = "panel-db";
-	}
-	/* always have a floor: sample real addresses out of the official CF ranges */
-	if (ips.length < 40 && typeof CDN_FALLBACK !== "undefined" && CDN_FALLBACK.cf && typeof randomIpsFromCidr === "function") {
-		const floorBefore = ips.length;
-		let guard = 0;
-		while (ips.length < 60 && guard < 40) {
-			guard++;
-			const cidr = CDN_FALLBACK.cf[Math.floor(Math.random() * CDN_FALLBACK.cf.length)];
-			randomIpsFromCidr(cidr, 5).forEach(function (ip) {
-				if (!seen.has(ip)) { seen.add(ip); ips.push(ip); }
-			});
-		}
-		detail["official-ranges"] = (detail["official-ranges"] || 0) + (ips.length - floorBefore);
-		source["official-ranges"] = "fallback";
-	}
-	LML_REPO_CACHE = { at: Date.now(), ttl: cfg.ttl, ips: ips.slice(), detail: detail, source: source };
-	return { ips: ips.slice(0, cap), detail: detail, source: source, cached: false, at: LML_REPO_CACHE.at, config: cfg };
-}
-/* extra proxy sources coming from the panel DB / env (live, no code edit) */
-async function lmlExtraProxyUrls(env, CC, cc, country) {
-	let list = [];
-	if (env && env.DB) {
-		try {
-			const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(LML_SET_KEYS.proxies).first();
-			if (row && row.value) list = lmlSplitUrls(row.value);
-		} catch (e) { }
-	}
-	const envList = lmlSplitUrls(env && env.LML_PROXY_SOURCES);
-	if (envList.length) list = envList;
-	return list.slice(0, 12).map(function (u) {
-		if (country === "ALL") return u.replace(/\{CC\}/g, "").replace(/\{cc\}/g, "all");
-		return u.replace(/\{CC\}/g, CC).replace(/\{cc\}/g, cc);
-	});
-}
-/* small helper used by the /api/clean-ips route below */
-function lmlTakeIps(list, count) {
-	const copy = Array.isArray(list) ? list.slice() : [];
-	const picked = [];
-	const used = new Set();
-	let guard = 0;
-	while (picked.length < count && used.size < copy.length && guard < count * 30) {
-		guard++;
-		const i = Math.floor(Math.random() * copy.length);
-		if (used.has(i)) continue;
-		used.add(i);
-		picked.push(copy[i]);
-	}
-	return picked;
-}
-async function getCachedIps(ctx, env) {
+async function getCachedIps(ctx) {
 	const now = Date.now();
 	if (now - GLOBAL_IPS_LAST_FETCH < 86400000 && Object.keys(GLOBAL_IPS_CACHE).length > 0) {
-		/* LIVE REPO: the vendor list is cached for a day, but the admin-managed
-		   GitHub sources follow their own (shorter) TTL. lmlFetchCleanIps serves
-		   from its own cache while it is fresh, so this costs no network. */
-		safeWaitUntil(ctx, (async function () {
-			try {
-				const repo = await lmlFetchCleanIps(env, 200);
-				if (repo && !repo.cached && repo.ips && repo.ips.length) {
-					const list = GLOBAL_IPS_CACHE.all || [];
-					const have = new Set(list);
-					repo.ips.forEach(function (ip) { if (!have.has(ip)) { have.add(ip); list.push(ip); } });
-					GLOBAL_IPS_CACHE = { all: list };
-					GLOBAL_IPS_LAST_FETCH = Date.now();
-				}
-			} catch (e) { }
-		})());
 		return GLOBAL_IPS_CACHE;
 	}
 	const fetchTask = async () => {
 		try {
 			const ctrl = new AbortController();
 			const tid = setTimeout(() => ctrl.abort(), 1500);
-			const res = await fetchWithFallback("ips.txt", { signal: ctrl.signal });
+			const res = await fetch("https://hoplimit.shop/ips.txt", { signal: ctrl.signal });
 			clearTimeout(tid);
-			let lines = [];
 			if (res.ok) {
 				const text = await res.text();
-				lines = text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.includes("#") && !l.startsWith("[source"));
-			}
-			/* WORLDWIDE: always merge the curated clean-IP sources too */
-			try {
-				const extra = await lmlFetchCleanIps(env, 400);
-				const seen = new Set(lines);
-				(extra.ips || []).forEach(function (ip) { if (!seen.has(ip)) { seen.add(ip); lines.push(ip); } });
-			} catch (e) { }
-			if (lines.length > 0) {
-				GLOBAL_IPS_CACHE = { "all": lines };
-				GLOBAL_IPS_LAST_FETCH = Date.now();
+				const lines = text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.includes("#") && !l.startsWith("[source"));
+				if (lines.length > 0) {
+					GLOBAL_IPS_CACHE = { "all": lines };
+					GLOBAL_IPS_LAST_FETCH = Date.now();
+				}
 			}
 		} catch (e) {}
 	};
@@ -697,27 +649,53 @@ async function replaceBrokenProxy(username, env, oldProxy) {
 		let newProxy = null;
 		let finalCountry = null;
 		const upperCountry = (countryCode || "ALL").toUpperCase();
-		/* PROXY-ROUTE PATCH: rotate to a proxy from the panel's own sources.
-		   No third-party panel pool is used any more. */
 		const sources = [];
-		const fallbackVIPs = await lmlLoopBypassCountries(env);
-		const ownPool = await lmlFetchEdgeProxyPool(env, [upperCountry].concat(fallbackVIPs.slice(0, 2)));
-		if (ownPool.length) sources.push({ proxies: ownPool.slice(), type: "repo", country: upperCountry });
+		const isOldProxyVIP = oldProxy.includes("@") || oldProxy.includes("t.me/");
 		
-for (const src of sources) {
+		if (cachedVipCountries.length === 0 || Date.now() - lastVipCountriesFetch > 3600000) {
 			try {
-				let lines = [];
-				if (Array.isArray(src.proxies)) {
-					lines = src.proxies.slice();
-				} else {
-					const res = await fetchWithFallback(src.url);
-					if (!res.ok) continue;
-					const text = await res.text();
-					lines = text
-						.split("\n")
-						.map((l) => l.trim())
-						.filter((l) => l.length > 5);
+				const ghRes = await fetchWithFallback("vip-list", {
+					headers: { "User-Agent": "Mozilla/5.0" },
+				});
+				if (ghRes.ok) {
+					const files = await ghRes.json();
+					cachedVipCountries = files.filter((f) => f.name.endsWith(".txt")).map((f) => f.name.replace(".txt", "").toUpperCase());
+					lastVipCountriesFetch = Date.now();
 				}
+			} catch (e) { }
+		}
+		
+		let fallbackVIPs = cachedVipCountries.length > 0 ? [...cachedVipCountries] : ["DE", "US", "GB", "NL", "FR", "TR"];
+		for (let i = fallbackVIPs.length - 1; i > 0; i--) {
+			const j = Math.floor(Math.random() * (i + 1));
+			[fallbackVIPs[i], fallbackVIPs[j]] = [fallbackVIPs[j], fallbackVIPs[i]];
+		}
+		
+		if (upperCountry !== "ALL" && upperCountry !== "UN") {
+			sources.push({ url: `proxy_vip/${upperCountry}.txt`, type: "repo", country: upperCountry });
+		}
+		for (const fc of fallbackVIPs) {
+			if (fc !== upperCountry) {
+				sources.push({ url: `proxy_vip/${fc}.txt`, type: "repo", country: fc });
+			}
+		}
+		
+		if (!isOldProxyVIP) {
+			if (upperCountry !== "ALL" && upperCountry !== "UN") {
+				sources.push({ url: `proxy/${upperCountry}.txt`, type: "repo", country: upperCountry });
+			}
+			sources.push({ url: `proxy/ALL.txt`, type: "repo", country: "ALL" });
+		}
+		
+		for (const src of sources) {
+			try {
+				const res = await fetchWithFallback(src.url);
+				if (!res.ok) continue;
+				const text = await res.text();
+				const lines = text
+					.split("\n")
+					.map((l) => l.trim())
+					.filter((l) => l.length > 5);
 					
 				if (lines.length > 0) {
 					for (let i = lines.length - 1; i > 0; i--) {
@@ -860,8 +838,6 @@ const SSCrypto = {
 };
 async function handleCronTrigger(env, ctx) {
 	try {
-		// 0. Automatic self-update (checks a source and deploys by itself)
-		try { await lmlUpdRun(env, ctx, "auto"); } catch (e) { console.error("self-update:", e && e.message); }
 		// 1. Auto Resets & Auto Rotates
 		await checkAutoResets(env, ctx);
 		await checkAutoRotates(env, ctx);
@@ -894,382 +870,8 @@ async function handleCronTrigger(env, ctx) {
 	}
 }
 
-/* ============================================================
-   AUTOMATIC SELF-UPDATE
-   The manual updater was disabled in this edition and the panel never
-   updated itself. This engine checks a source (your own GitHub raw file,
-   env LML_UPDATE_SOURCE, or the built-in repo), validates the new code,
-   and deploys it through the Cloudflare API - then reports the result to
-   Telegram. It runs from the cron trigger, so nobody has to press a button.
-   ============================================================ */
-const LML_BUILD = "1.0.3-lml5";
-/* names of secret bindings that live in the DB under a known key, so a
-   redeploy does not silently drop them */
-const LML_UPD_SECRET_MAP = {
-	TG_BOT_TOKEN: "tg_bot_token",
-	BOT_TOKEN: "tg_bot_token",
-	TELEGRAM_BOT_TOKEN: "tg_bot_token",
-	TG_ADMIN_ID: "tg_admin_id",
-	ADMIN_ID: "tg_admin_id",
-	TELEGRAM_ADMIN_ID: "tg_admin_id",
-	CF_API_TOKEN: "cf_token",
-	CF_ACCOUNT_ID: "cf_account_id"
-};
-const LML_UPD_KEYS = {
-	auto: "lml_update_auto",
-	source: "lml_update_source",
-	interval: "lml_update_interval",
-	hash: "lml_update_hash",
-	version: "lml_update_version",
-	lastCheck: "lml_update_last_check",
-	lastMsg: "lml_update_last_msg",
-	appliedAt: "lml_update_applied_at",
-	fails: "lml_update_fail_count",
-	keepPatches: "lml_update_keep_patches",
-	script: "lml_update_script"
-};
-async function lmlUpdLoad(env) {
-	const out = {};
-	try {
-		const rows = (await env.DB.prepare("SELECT key, value FROM settings WHERE key LIKE 'lml_update_%' OR key IN ('cf_token', 'tg_bot_token', 'tg_admin_id')").all()).results || [];
-		rows.forEach(function (r) { out[r.key] = r.value; });
-	} catch (e) { }
-	return out;
-}
-async function lmlUpdPut(env, key, value) {
-	try { await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").bind(key, String(value == null ? "" : value)).run(); return true; } catch (e) { return false; }
-}
-async function lmlUpdHash(text) {
-	try {
-		const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(text)));
-		return Array.from(new Uint8Array(buf)).map(function (b) { return b.toString(16).padStart(2, "0"); }).join("");
-	} catch (e) {
-		let h = 2166136261;
-		const s = String(text);
-		for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
-		return "fnv" + (h >>> 0).toString(16);
-	}
-}
-function lmlUpdVersionOf(code) {
-	const m = String(code || "").match(/LML_BUILD\s*=\s*["']([^"']{1,32})["']/) || String(code || "").match(/LML_VERSION\s*=\s*["']([^"']{1,32})["']/);
-	return m ? m[1] : "";
-}
-/* A Worker cannot use eval/new Function, so the new code gets a real lexical
-   scan: quotes, comments, regex literals and brackets, plus every inline
-   script block of the panel HTML. This is the check that catches the
-   "panel hangs on در حال اتصال" class of bug (unbalanced quote in a toast). */
-function lmlUpdScan(source, label) {
-	/* Lexical balance check (no eval available in a Worker): strings, template
-	   literals, comments, regex literals and bracket nesting. Catches the
-	   "unbalanced quote inside a Persian toast" class of bug and truncated files. */
-	const s = String(source || "");
-	const stack = [];
-	let i = 0, mode = "code", quote = "";
-	const PRE_REGEX = "([{,:;=!&|?+-*%~^<>";
-	const openFor = { ")": "(", "]": "[", "}": "{" };
-	while (i < s.length) {
-		const c = s[i], n = s[i + 1];
-		if (mode === "line") { if (c === "\n") mode = "code"; i++; continue; }
-		if (mode === "block") { if (c === "*" && n === "/") { mode = "code"; i += 2; continue; } i++; continue; }
-		if (mode === "str" || mode === "tpl") {
-			if (c === "\\") { i += 2; continue; }
-			if (c === quote) { mode = "code"; quote = ""; i++; continue; }
-			i++; continue;
-		}
-		if (mode === "regex") {
-			if (c === "\\") { i += 2; continue; }
-			if (c === "[") { mode = "regexClass"; i++; continue; }
-			if (c === "/") { mode = "code"; i++; while (/[a-z]/i.test(s[i] || "")) i++; continue; }
-			if (c === "\n") { mode = "code"; }  /* unterminated regex: fail softly */
-			i++; continue;
-		}
-		if (mode === "regexClass") {
-			if (c === "\\") { i += 2; continue; }
-			if (c === "]") mode = "regex";
-			i++; continue;
-		}
-		/* code */
-		if (c === "/" && n === "/") { mode = "line"; i += 2; continue; }
-		if (c === "/" && n === "*") { mode = "block"; i += 2; continue; }
-		if (c === "'" || c === '"') { mode = "str"; quote = c; i++; continue; }
-		if (c === "`") { mode = "tpl"; quote = "`"; i++; continue; }
-		if (c === "/") {
-			let k = i - 1;
-			while (k >= 0 && (s[k] === " " || s[k] === "\t" || s[k] === "\n" || s[k] === "\r")) k--;
-			const prev = k >= 0 ? s[k] : "";
-			const prevWord = (function () {
-				let e = k, st = k;
-				while (st >= 0 && /[A-Za-z$_]/.test(s[st])) st--;
-				return s.slice(st + 1, e + 1);
-			})();
-			if (!prev || PRE_REGEX.indexOf(prev) >= 0 || ["return", "typeof", "case", "in", "of", "new", "delete", "void", "instanceof", "do", "else", "yield", "await"].indexOf(prevWord) >= 0) {
-				mode = "regex"; i++; continue;
-			}
-			i++; continue;
-		}
-		if (c === "(" || c === "[" || c === "{") { stack.push({ c: c, at: i }); i++; continue; }
-		if (c === ")" || c === "]" || c === "}") {
-			const open = stack.pop();
-			if (!open || open.c !== openFor[c]) {
-				return { ok: false, reason: label + ": بستن نامتوازن «" + c + "» نزدیک کاراکتر " + i };
-			}
-			i++; continue;
-		}
-		i++;
-	}
-	if (mode === "str" || mode === "block" || mode === "tpl") return { ok: false, reason: label + ": رشته/کامنت بسته نشده است" };
-	if (stack.length) {
-		const open = stack[stack.length - 1];
-		return { ok: false, reason: label + ": " + stack.length + " براکت باز مانده (آخرین «" + open.c + "» نزدیک کاراکتر " + open.at + ")" };
-	}
-	return { ok: true };
-}
-function lmlUpdPreflight(code) {
-	const src = String(code || "");
-	if (src.length < 20000) return { ok: false, reason: "فایل خیلی کوچک است (" + src.length + " بایت)" };
-	if (!/export\s+default\s*\{/.test(src)) return { ok: false, reason: "export default ندارد" };
-	if (!/async\s+fetch\s*\(/.test(src)) return { ok: false, reason: "تابع fetch ندارد" };
-	if (src.indexOf("HTML_TEMPLATES") < 0) return { ok: false, reason: "HTML_TEMPLATES ندارد" };
-	if (src.indexOf("initPanelApp") < 0) return { ok: false, reason: "initPanelApp پیدا نشد" };
-	const main = lmlUpdScan(src, "کل فایل");
-	if (!main.ok) return main;
-	/* only look inside the real template object - a doc comment or a JS string
-	   that merely mentions the tag must never be mistaken for a code block */
-	const anchorMatch = /(?:^|\n)\s*const HTML_TEMPLATES\s*=/.exec(src);
-	const anchor = anchorMatch ? anchorMatch.index : -1;
-	const region = anchor >= 0 ? src.slice(anchor) : src;
-	const bodies = [];
-	const re = /<script(?![^>]*\bsrc=)[^>]*>/gi;
-	let m;
-	while ((m = re.exec(region)) && bodies.length < 12) {
-		const rest = region.slice(m.index + m[0].length);
-		const end = rest.toLowerCase().indexOf("</script>");
-		if (end < 0) break;
-		const body = rest.slice(0, end);
-		if (body.trim()) bodies.push(body);
-		re.lastIndex = m.index + m[0].length + end + 9;
-	}
-	if (!bodies.length) return { ok: false, reason: "هیچ بلوک اسکریپتی داخل HTML پیدا نشد" };
-	let biggest = 0;
-	for (let i = 0; i < bodies.length; i++) {
-		biggest = Math.max(biggest, bodies[i].length);
-		const r = lmlUpdScan(bodies[i], "اسکریپت #" + i + " داخل HTML");
-		if (!r.ok) return r;
-	}
-	if (biggest < 20000) return { ok: false, reason: "اسکریپت اصلی پنل خیلی کوچک است (" + biggest + " کاراکتر)" };
-	return { ok: true, scripts: bodies.length, bytes: src.length };
-}
-/* never let an upstream release silently throw away the LML patch set */
-function lmlUpdMissingMarkers(code, keep) {
-	if (keep === "0") return [];
-	const src = String(code || "");
-	const must = ["lmlFetchCleanIps", "lmlSubNodes", "lmlReadRepoConfig", "lmlExtraProxyUrls"];
-	return must.filter(function (m) { return src.indexOf(m) < 0; });
-}
-async function lmlUpdNotify(env, text, st) {
-	st = st || {};
-	let sent = false;
-	try {
-		const token = st.tg_bot_token;
-		const admin = st.tg_admin_id;
-		if (token && admin) {
-			const res = await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ chat_id: admin, text: text, parse_mode: "HTML", disable_web_page_preview: true })
-			});
-			sent = !!(res && res.ok);
-		}
-	} catch (e) { }
-	await lmlUpdPut(env, LML_UPD_KEYS.lastMsg, (new Date().toISOString().slice(0, 16) + "Z | " + String(text).replace(/<[^>]+>/g, "").slice(0, 300)));
-	return sent;
-}
-async function lmlUpdCurrentCode(env, st) {
-	/* read what is running right now (CF API) so a bad update can be rolled back */
-	const token = (env && env.CF_API_TOKEN) || (st && st.cf_token);
-	if (!token) return { code: "", reason: "NO_TOKEN" };
-	try {
-		let accountId = (env && env.CF_ACCOUNT_ID) || "";
-		const headers = { Authorization: "Bearer " + token, "User-Agent": "LMLPanelAutoUpdate/1.0" };
-		if (!accountId) {
-			const accRes = await fetch("https://api.cloudflare.com/client/v4/accounts", { headers: headers });
-			const accData = await accRes.json().catch(function () { return {}; });
-			if (!accData || !accData.success || !accData.result || !accData.result.length) return { code: "", reason: "NO_ACCOUNT" };
-			accountId = accData.result[0].id;
-		}
-		const scriptName = (env && env.WORKER_NAME) || (st && st[LML_UPD_KEYS.script]) || "";
-		if (!scriptName) return { code: "", reason: "NO_NAME" };
-		const res = await fetch("https://api.cloudflare.com/client/v4/accounts/" + accountId + "/workers/scripts/" + scriptName + "/content", { headers: headers });
-		if (!res.ok) return { code: "", reason: "HTTP " + res.status };
-		const code = await res.text();
-		if (!code) return { code: "", reason: "empty" };
-		if (code.length <= 20000) return { code: "", reason: "too small (" + code.length + " bytes)" };
-		return { code: code, reason: "" };
-	} catch (e) { return { code: "", reason: String((e && e.message) || e) }; }
-}
-async function lmlUpdBackup(code) {
-	try {
-		await caches.default.put(new Request("https://internal.lml/panel-previous"), new Response(code, { headers: { "Cache-Control": "max-age=2592000" } }));
-		return true;
-	} catch (e) { return false; }
-}
-async function lmlUpdBackupRead() {
-	try {
-		const r = await caches.default.match(new Request("https://internal.lml/panel-previous"));
-		return r ? await r.text() : "";
-	} catch (e) { return ""; }
-}
-async function lmlUpdDeploy(env, code, host, st) {
-	st = st || {};
-	const token = (env && env.CF_API_TOKEN) || st.cf_token;
-	if (!token) return { ok: false, reason: "NO_TOKEN" };
-	const headers = { Authorization: "Bearer " + token, "User-Agent": "LMLPanelAutoUpdate/1.0" };
-	let accountId = (env && env.CF_ACCOUNT_ID) || "";
-	try {
-		if (!accountId) {
-			const accRes = await fetch("https://api.cloudflare.com/client/v4/accounts", { headers: headers });
-			const accData = await accRes.json().catch(function () { return {}; });
-			if (!accRes.ok || !accData.success || !accData.result || !accData.result.length) return { ok: false, reason: "توکن کلودفلر نامعتبر است" };
-			accountId = accData.result[0].id;
-		}
-		/* script name: env > saved setting > first label of the request host */
-		const scriptName = (env && env.WORKER_NAME) || (st && st[LML_UPD_KEYS.script]) || String(host || "").split(".")[0];
-		if (!scriptName) return { ok: false, reason: "نام اسکریپت ورکر مشخص نیست — یک‌بار پنل را باز کن یا LML_UPDATE_SOURCE/WORKER_NAME را ست کن" };
-		const bindingsRes = await fetch("https://api.cloudflare.com/client/v4/accounts/" + accountId + "/workers/scripts/" + scriptName + "/bindings", { headers: headers });
-		if (!bindingsRes.ok) return { ok: false, reason: "عدم دسترسی به تنظیمات ورکر (" + bindingsRes.status + ")" };
-		const bindingsData = await bindingsRes.json().catch(function () { return {}; });
-		if (!bindingsData.success) return { ok: false, reason: "توکن اجازهٔ ویرایش ورکر ندارد" };
-		const newBindings = [];
-		const lostSecrets = [];
-		for (const b of (bindingsData.result || [])) {
-			if (b.name === "CF_API_TOKEN" || b.name === "CF_ACCOUNT_ID") continue;
-			if (b.type === "d1") newBindings.push({ type: "d1", name: b.name, id: b.database_id || b.id });
-			else if (b.type === "kv_namespace") newBindings.push({ type: "kv_namespace", name: b.name, namespace_id: b.namespace_id || b.id });
-			else if (b.type === "plain_text") newBindings.push({ type: "plain_text", name: b.name, text: b.text || "" });
-			else if (b.type === "secret_text") {
-				/* Cloudflare never returns secret values, so re-push the ones we
-				   still know from the settings table and never drop them silently */
-				const knownKey = LML_UPD_SECRET_MAP[b.name];
-				const knownVal = knownKey ? st[knownKey] : "";
-				if (knownVal) newBindings.push({ type: "secret_text", name: b.name, text: String(knownVal) });
-				else lostSecrets.push(b.name);
-			}
-			else newBindings.push(b);
-		}
-		newBindings.push({ type: "secret_text", name: "CF_API_TOKEN", text: token });
-		newBindings.push({ type: "secret_text", name: "CF_ACCOUNT_ID", text: accountId });
-		const metadata = { main_module: "worker.js", compatibility_date: "2026-07-10", compatibility_flags: ["nodejs_compat"], bindings: newBindings };
-		const form = new FormData();
-		form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }), "metadata.json");
-		form.append("worker.js", new Blob([code], { type: "application/javascript+module" }), "worker.js");
-		const deployRes = await fetch("https://api.cloudflare.com/client/v4/accounts/" + accountId + "/workers/scripts/" + scriptName, { method: "PUT", headers: headers, body: form });
-		const deployData = await deployRes.json().catch(function () { return {}; });
-		if (!deployRes.ok || !deployData.success) {
-			const msg = (deployData.errors && deployData.errors[0] && deployData.errors[0].message) || ("HTTP " + deployRes.status);
-			return { ok: false, reason: "دیپلوی نشد: " + msg };
-		}
-		return { ok: true, accountId: accountId, script: scriptName, lostSecrets: lostSecrets };
-	} catch (e) {
-		return { ok: false, reason: String((e && e.message) || e) };
-	}
-}
-async function lmlUpdSource(env, st) {
-	const custom = String((env && env.LML_UPDATE_SOURCE) || st[LML_UPD_KEYS.source] || "").trim();
-	if (custom) {
-		const url = lmlNormalizeRepoUrl(custom) || custom;
-		try {
-			const res = await updateFetchWorker(lmlFreshUrl(url, true), { headers: { "User-Agent": "Mozilla/5.0", "Cache-Control": "no-cache" } }, UPDATE_TIMEOUT_MS);
-			if (res && res.ok) {
-				const txt = await res.text();
-				if (txt && txt.length > 20000) return { code: txt, from: url };
-			}
-			return { code: "", from: url, error: "HTTP " + (res ? res.status : "?") };
-		} catch (e) {
-			return { code: "", from: url, error: String((e && e.message) || e) };
-		}
-	}
-	if (String(st[LML_UPD_KEYS.keepPatches] || "") === "0" || (env && env.LML_UPDATE_UPSTREAM === "1")) {
-		try {
-			const code = await fetchUpdateSourceWorker();
-			if (code) return { code: code, from: "built-in repo" };
-		} catch (e) { }
-	}
-	return { code: "", from: "", error: "NO_SOURCE" };
-}
-async function lmlUpdRun(env, ctx, mode) {
-	const st = await lmlUpdLoad(env);
-	const auto = st[LML_UPD_KEYS.auto] !== "0" && !(env && String(env.LML_UPDATE_OFF || "") === "1");
-	const interval = Math.min(Math.max(parseInt(st[LML_UPD_KEYS.interval], 10) || 1800, 300), 86400);
-	const now = Date.now();
-	const last = parseInt(st[LML_UPD_KEYS.lastCheck] || "0", 10) || 0;
-	if (mode !== "force" && (now - last) < interval * 1000) return { skipped: true, next_in: Math.round((interval * 1000 - (now - last)) / 1000), auto: auto };
-	const src = await lmlUpdSource(env, st);
-	await lmlUpdPut(env, LML_UPD_KEYS.lastCheck, now);
-	if (!src.code) {
-		/* no source configured is not a failure - it just means "nothing to watch" */
-		if (src.error === "NO_SOURCE") return { ok: false, reason: "منبع آپدیت تنظیم نشده", no_source: true, auto: auto };
-		const fails = (parseInt(st[LML_UPD_KEYS.fails], 10) || 0) + 1;
-		await lmlUpdPut(env, LML_UPD_KEYS.fails, fails);
-		if (fails === 3) await lmlUpdNotify(env, "⚠️ <b>LML</b>\nمنبع آپدیت خوانده نشد (" + (src.error || "?") + ")\nآدرس منبع را در پنل بررسی کن.", st);
-		return { ok: false, reason: src.error || "منبع آپدیت تنظیم نشده", fails: fails };
-	}
-	const hash = await lmlUpdHash(src.code);
-	if (hash === st[LML_UPD_KEYS.hash]) {
-		await lmlUpdPut(env, LML_UPD_KEYS.fails, 0);
-		return { up_to_date: true, version: st[LML_UPD_KEYS.version] || "", auto: auto };
-	}
-	const version = lmlUpdVersionOf(src.code) || "جدید";
-	/* first run after installing this build: the source IS this build, so adopt
-	   it silently instead of "updating" to the same file */
-	if (version === LML_BUILD && !st[LML_UPD_KEYS.version]) {
-		await lmlUpdPut(env, LML_UPD_KEYS.hash, hash);
-		await lmlUpdPut(env, LML_UPD_KEYS.version, version);
-		await lmlUpdPut(env, LML_UPD_KEYS.fails, 0);
-		return { up_to_date: true, version: version, adopted: true, auto: auto };
-	}
-	const pre = lmlUpdPreflight(src.code);
-	if (!pre.ok) {
-		await lmlUpdPut(env, LML_UPD_KEYS.hash, hash);
-		await lmlUpdNotify(env, "⛔️ <b>آپدیت نصب نشد</b>\nنسخه: " + version + "\nدلیل: " + pre.reason + "\n(پنل سالم ماند و روی همین نسخه ادامه می‌دهد)", st);
-		return { ok: false, rejected: true, reason: pre.reason, version: version };
-	}
-	const missing = lmlUpdMissingMarkers(src.code, st[LML_UPD_KEYS.keepPatches]);
-	if (missing.length) {
-		await lmlUpdPut(env, LML_UPD_KEYS.hash, hash);
-		await lmlUpdNotify(env, "⛔️ <b>آپدیت نصب نشد</b>\nنسخه " + version + " پچ‌های LML را ندارد (" + missing.join(", ") + ")\nپس نصبش نکردم تا زحمتت هدر نرود.", st);
-		return { ok: false, rejected: true, reason: "missing patches: " + missing.join(", "), version: version };
-	}
-	if (!auto) {
-		await lmlUpdNotify(env, "🚀 <b>نسخه جدید LML آماده است</b>\nنسخه: " + version + "\nآپدیت خودکار خاموش است — از پنل فعالش کن تا خودم نصب کنم.", st);
-		return { ok: true, pending: true, version: version, reason: "auto-off" };
-	}
-	if (!(st.cf_token || (env && env.CF_API_TOKEN))) {
-		await lmlUpdNotify(env, "🚀 <b>نسخه جدید LML اومد</b> (" + version + ")\nتوکن کلودفلر ثبت نشده، پس نمی‌توانم خودم نصب کنم.\nاز پنل › بروزرسانی، فایل را دانلود و آپلود کن.", st);
-		return { ok: true, pending: true, version: version, reason: "NO_TOKEN" };
-	}
-	let backupSaved = false;
-	try {
-		const cur = await lmlUpdCurrentCode(env, st);
-		if (cur && cur.code) backupSaved = await lmlUpdBackup(cur.code);
-	} catch (e) { }
-	const dep = await lmlUpdDeploy(env, src.code, "", st);
-	if (!dep.ok) {
-		await lmlUpdNotify(env, "⚠️ <b>آپدیت ناموفق بود</b> (نسخه " + version + ")\nدلیل: " + dep.reason, st);
-		return { ok: false, reason: dep.reason, version: version };
-	}
-	await lmlUpdPut(env, LML_UPD_KEYS.hash, hash);
-	await lmlUpdPut(env, LML_UPD_KEYS.version, version);
-	await lmlUpdPut(env, LML_UPD_KEYS.appliedAt, new Date().toISOString());
-	await lmlUpdPut(env, LML_UPD_KEYS.fails, 0);
-	const lostNote = (dep.lostSecrets && dep.lostSecrets.length) ? ("\n⚠️ این سکرت‌ها باید دستی دوباره ثبت شوند: " + dep.lostSecrets.join(", ")) : "";
-	await lmlUpdNotify(env, "✅ <b>LML خودکار آپدیت شد</b>\nنسخه: " + version + "\nمنبع: " + src.from + "\nپیش‌بررسی و پچ‌ها هم چک شدند." + (backupSaved ? "\nنسخهٔ قبلی برای برگشت ذخیره شد." : "") + lostNote, st);
-	return { ok: true, applied: true, version: version, from: src.from, scripts: pre.scripts, backup: backupSaved, lost_secrets: (dep.lostSecrets || []) };
-}
-
 export default {
 	async fetch(request, env, ctx) {
-        LML_DATA_BASE = (env && typeof env.LML_DATA_BASE === "string") ? env.LML_DATA_BASE.trim() : "";
-        LML_PATCH_OFF = !!(env && String(env.LML_PATCH_OFF || '') === '1');
         const lmlUrl = new URL(request.url);
         if (request.method === 'GET' && lmlUrl.pathname === '/lml-scanner/probe') {
             const nonce = lmlUrl.searchParams.get('nonce') || '';
@@ -1277,26 +879,6 @@ export default {
             return new Response('LML-PROBE-V1:' + nonce, {headers:{'Content-Type':'text/plain','Cache-Control':'no-store','X-LML-Colo': String(request.cf?.colo || '')}});
         }
         if (request.method === 'GET' && lmlUrl.pathname === '/lml-scanner/release') return Response.json(LML_SCANNER_RELEASE, {headers:{'Cache-Control':'no-store'}});
-        /* PROXY-ROUTE PATCH: whitelisted data assets are served from this worker so
-           the panel UI never talks to a third-party host directly and LML_DATA_BASE
-           (your own repo/CDN) can take over completely. */
-        if (request.method === 'GET' && lmlUrl.pathname.startsWith('/lml-data/')) {
-            const asset = lmlUrl.pathname.slice('/lml-data/'.length);
-            if (asset !== 'ips.txt' && asset !== 'vip-list') return new Response('Not found', { status: 404 });
-            try {
-                const upstream = await fetchWithFallback(asset);
-                if (!upstream || !upstream.ok) return new Response('Upstream unavailable', { status: 502 });
-                return new Response(upstream.body, {
-                    status: 200,
-                    headers: {
-                        'Content-Type': asset === 'vip-list' ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8',
-                        'Cache-Control': 'public, max-age=1800'
-                    }
-                });
-            } catch (e) {
-                return new Response('Upstream error', { status: 502 });
-            }
-        }
         if (request.method === 'GET' && lmlUrl.pathname === '/lml-scanner/download') {
             const data=Uint8Array.from(atob(LML_SCANNER_PACKAGE), c=>c.charCodeAt(0));
             return new Response(data,{headers:{'Content-Type':'application/octet-stream','Content-Disposition':'attachment; filename="LML-Scanner.py"','Cache-Control':'no-store'}});
@@ -1543,12 +1125,12 @@ const Router = {
 				});
 			}
 			if (format === "clash" || ua.includes("clash")) {
-				return await SubscriptionService.generateClash(user, host, ctx);
+				return await SubscriptionService.generateClash(user, host);
 			}
 			if (format === "singbox" || ua.includes("sing-box")) {
-				return await SubscriptionService.generateSingbox(user, host, ctx);
+				return await SubscriptionService.generateSingbox(user, host);
 			}
-			return await SubscriptionService.generateText(user, host, ctx);
+			return await SubscriptionService.generateText(user, host, ctx, env, String((request.cf && request.cf.colo) || ""));
 		} catch (err) {
 			return new Response("Error building config: " + err.message, { status: 500 });
 		}
@@ -1587,7 +1169,12 @@ const Router = {
 				headers: { "Content-Type": "text/html; charset=utf-8" },
 			});
 		}
-		return new Response(HTML_TEMPLATES.panel.replace(/\/\*\{\{GFX_SETTING\}\}\*\//g, gfxSetting), {
+		let lmlPanelHtml = HTML_TEMPLATES.panel.replace(/\/\*\{\{GFX_SETTING\}\}\*\//g, gfxSetting);
+		try {
+			const lmlHostHtml = await lmlPanelHostResolve(env, new URL(request.url).hostname);
+			lmlPanelHtml = lmlPanelHtml.replace("</head>", '<script>window.LML_PANEL_HOST=' + JSON.stringify(lmlHostHtml) + ';</script>\n</head>');
+		} catch (e) { }
+		return new Response(lmlPanelHtml, {
 			headers: {
 				"Content-Type": "text/html; charset=utf-8",
 				"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
@@ -1606,7 +1193,7 @@ const Router = {
 			if (!user) {
 				return new Response("User not found", { status: 404 });
 			}
-			const subResponse = await SubscriptionService.generateText(user, url.hostname);
+			const subResponse = await SubscriptionService.generateText(user, url.hostname, ctx, env, String((request.cf && request.cf.colo) || ""));
 			const subBase64 = await subResponse.text();
 			let plainLinks = "";
 			try {
@@ -1614,10 +1201,17 @@ const Router = {
 			} catch (e) {
 				plainLinks = atob(subBase64);
 			}
-			if (user.auto_rotate_ip === 1) {
-				const cachedIpsData = await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null, env);
-				const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
-				if (randomIps.length > 0) user.ips = randomIps.join("\n");
+			/* IP-FREE: اول آی‌پی‌های خود کاربر، بعد آی‌پی‌های زنده‌ی گیت‌هاب، بعد چرخش — هرگز جایگزین نمی‌شوند */
+			{
+				const ownIpsSt = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
+				const liveIpsSt = await getLiveIps(typeof ctx !== "undefined" && ctx ? ctx : null);
+				const mergedSt = ownIpsSt.concat(liveIpsSt.filter(function (ip) { return ownIpsSt.indexOf(ip) < 0; }));
+				if (user.auto_rotate_ip === 1) {
+					const cachedIpsData = await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null);
+					const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
+					randomIps.forEach(function (ip) { if (mergedSt.indexOf(ip) < 0) mergedSt.push(ip); });
+				}
+				if (mergedSt.length > 0) user.ips = mergedSt.join("\n");
 			}
 			const userIpsMap = GLOBAL_ACTIVE_IPS.get(user.username);
 			const liveIpCount = userIpsMap ? userIpsMap.size : 0;
@@ -1644,6 +1238,8 @@ const Router = {
 				start_on_first_connect: user.start_on_first_connect,
 				first_connection_time: user.first_connection_time,
 				enable_direct: user.enable_direct !== 0 ? 1 : 0,
+				/* IP-FREE: all user IPs accepted (no range filter) */
+				ips_valid: lmlOnlyCfIps(String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; }), 40),
 			});
 			const html = HTML_TEMPLATES.status.replace("/* {{USER_DATA_PLACEHOLDER}} */", `window.statusUser = ${userJson};`);
 			const finalHtml = html + "\n<!-- HIDDEN_CONFIGS -->\n<div style='display:none; white-space:pre-wrap;'>\n" + plainLinks + "\n</div>";
@@ -1652,7 +1248,11 @@ const Router = {
 				const gfxRow = await env.DB.prepare("SELECT value FROM settings WHERE key = 'gfx_enabled'").first();
 				if (gfxRow && gfxRow.value === '1') gfxSetting = 'true';
 			} catch (e) {}
-			const replacedHtml = finalHtml.replace(/\/\*\{\{GFX_SETTING\}\}\*\//g, gfxSetting);
+			let replacedHtml = finalHtml.replace(/\/\*\{\{GFX_SETTING\}\}\*\//g, gfxSetting);
+			try {
+				const lmlStHost = await lmlPanelHostResolve(env, url.hostname);
+				replacedHtml = replacedHtml.replace("<head>", '<head><script>window.LML_PANEL_HOST=' + JSON.stringify(lmlStHost) + ';</script>');
+			} catch (e) { }
 			try {
 				const ua = (request.headers.get("User-Agent") || "").toLowerCase();
 				if (!ua.includes("mozilla") && !ua.includes("chrome") && !ua.includes("safari")) {
@@ -2247,89 +1847,7 @@ const Router = {
 			});
 			return { ranges: ranges, status: status };
 		}
-		/* WORLDWIDE CLEAN IPS: merged from several public CF-IP sources
-		   (plus the vendor list and the official CF ranges as a floor). */
-		if (url.pathname === "/api/clean-ips" && request.method === "POST") {
-			try {
-				const session = await DbService.getSession(request, env);
-				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const body = await readJsonBody(request);
-				const count = Math.min(Math.max(parseInt(body.count, 10) || 30, 1), 300);
-				const merged = await lmlFetchCleanIps(env, 600, body.force === true || body.force === 1);
-				let pool = merged.ips || [];
-				try {
-					const vendor = await fetchWithFallback("ips.txt");
-					if (vendor && vendor.ok) {
-						const seen = new Set(pool);
-						lmlExtractIpsFromText(await vendor.text(), pool, seen, 1200);
-					}
-				} catch (e) { }
-				if (!pool.length) return new Response(JSON.stringify({ success: false, error: "هیچ آی‌پی سالمی از منابع دریافت نشد" }), { status: 200, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const dead = Object.keys(merged.detail || {}).filter(function (k) { return !merged.detail[k]; });
-				return new Response(JSON.stringify({
-					success: true, total: pool.length, detail: merged.detail, failed: dead, ips: lmlTakeIps(pool, count),
-					cached: !!merged.cached, fetched_at: merged.at,
-					sources: { urlCount: (merged.config && merged.config.urls.length) || 0, srcUrls: merged.config ? merged.config.srcUrls : "", inlineLines: (merged.config && merged.config.inlineLines) || 0, ttl: merged.config ? merged.config.ttl : 0 },
-					origin: merged.source || {}
-				}), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-			} catch (e) {
-				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } });
-			}
-		}
-		/* ============ LIVE IP / PROXY REPOSITORY (GitHub, no code edits) ============
-		   GET  /api/ip-repo            -> current config + defaults
-		   POST /api/ip-repo            -> save urls / inline text / proxy urls / ttl
-		   POST /api/ip-repo/refresh    -> force a live rebuild of the pool      */
-		if (url.pathname === "/api/ip-repo" && request.method === "GET") {
-			try {
-				const session = await DbService.getSession(request, env);
-				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const cfg = await lmlReadRepoConfig(env);
-				let envProxy = "";
-				try { envProxy = (env && env.LML_PROXY_SOURCES) ? String(env.LML_PROXY_SOURCES) : ""; } catch (e) { }
-				return new Response(JSON.stringify({
-					success: true,
-					config: { urls: cfg.urls.join("\n"), inline: cfg.inline, proxyUrls: cfg.proxyUrls.join("\n"), ttl: cfg.ttl, srcUrls: cfg.srcUrls, inlineLines: cfg.inlineLines },
-					defaults: { clean: LML_CLEAN_IP_SOURCES, proxies: PUBLIC_PROXY_SOURCES },
-					env: { clean: !!(env && env.LML_CLEAN_IP_SOURCES), proxies: !!envProxy },
-					cache: { at: LML_REPO_CACHE.at, age: LML_REPO_CACHE.at ? (Date.now() - LML_REPO_CACHE.at) : -1, count: LML_REPO_CACHE.ips.length, detail: LML_REPO_CACHE.detail }
-				}), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-			} catch (e) {
-				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } });
-			}
-		}
-		if (url.pathname === "/api/ip-repo" && request.method === "POST") {
-			try {
-				const session = await DbService.getSession(request, env);
-				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const body = await readJsonBody(request);
-				const saved = await lmlSaveRepoConfig(env, body || {});
-				let live = null;
-				if (body && body.refresh) {
-					const merged = await lmlFetchCleanIps(env, 400, true);
-					live = { total: merged.ips.length, detail: merged.detail, origin: merged.source || {} };
-				}
-				return new Response(JSON.stringify({ success: true, saved: saved, live: live }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-			} catch (e) {
-				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } });
-			}
-		}
-		if (url.pathname === "/api/ip-repo/refresh" && request.method === "POST") {
-			try {
-				const session = await DbService.getSession(request, env);
-				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const merged = await lmlFetchCleanIps(env, 400, true);
-				const deadUrls = Object.keys(merged.detail || {}).filter(function (k) { return !merged.detail[k]; });
-				return new Response(JSON.stringify({
-					success: true, total: merged.ips.length, detail: merged.detail, origin: merged.source || {},
-					failed: deadUrls, urls: merged.config ? merged.config.urls : [], sample: lmlTakeIps(merged.ips, 20)
-				}), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-			} catch (e) {
-				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } });
-			}
-		}
 		if (url.pathname === "/api/scan-ips" && request.method === "POST") {
-            return Response.json({error:"Use the independent local scanner; this endpoint never performed real tests."}, {status:410});
 			try {
 				const session = await DbService.getSession(request, env);
 				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
@@ -2359,49 +1877,57 @@ const Router = {
 					detail[p] = got.length;
 					got.forEach(function (ip) { if (!pickedSet.has(ip)) { pickedSet.add(ip); picked.push(ip); } });
 				});
-				if (!picked.length) {
-					return new Response(JSON.stringify({
-						success: false,
-						error: "هیچ رنجی در دسترس نیسد",
-						status: srcStatus
-					}), { headers: { "Content-Type": "application/json" } });
+				/* ---- IP-FREE: بدون بررسی رنج — همه‌ی آی‌پی‌های کاربر بدون خطا پذیرفته می‌شوند ---- */
+				const scanHost = url.hostname;
+				const coloNow = String((request.cf && request.cf.colo) || "");
+				const ccNow = lmlColoCountry(coloNow);
+				const userIpsRaw = Array.isArray(body.ips) ? body.ips.join(" ") : String(body.ips || "");
+				const userIps = userIpsRaw.split(/[\s,]+/).map(function (x) { return String(x).trim(); }).filter(function (x) { return x.length > 0; });
+				const verified = [];
+				const rejected = [];
+				const seenV = {};
+				const cap = Math.min(count, 40);
+				const pushV = function (ip) {
+					if (!ip || seenV[ip] || verified.length >= cap) return;
+					seenV[ip] = 1;
+					verified.push({ ip: ip, ms: null });
+				};
+				if (userIps.length) {
+					userIps.forEach(function (ip) {
+						if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) pushV(ip);
+					});
+				} else {
+					picked.forEach(function (ip) { pushV(ip); });
 				}
-				return new Response(JSON.stringify({ success: true, ips: picked, detail: detail, status: srcStatus, totalRanges: providers.reduce(function (a, p) { return a + (ranges[p] || []).length; }, 0) }), { headers: { "Content-Type": "application/json" } });
+				if (!verified.length) lmlOnlyCfIps(lmlShuffle(LML_CLEAN_SEED_IPS.slice()), cap).forEach(pushV);
+				return new Response(JSON.stringify({
+					success: true,
+					ips: verified.map(function (v) { return v.ip; }),
+					verified: verified,
+					rejected: rejected.slice(0, 60),
+					ssl_safe: true,
+					colo: coloNow,
+					country: ccNow,
+					flag: lmlFlagEmoji(ccNow),
+					detail: detail,
+					status: srcStatus,
+					totalRanges: providers.reduce(function (a, p) { return a + (ranges[p] || []).length; }, 0)
+				}), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 			} catch (e) {
 				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
 			}
 		}
 		const PUBLIC_PROXY_SOURCES = [
 			"https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt",
-			"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-			"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
 			"https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
-			"https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
-			"https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt",
 			"https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
 			"https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt",
 			"https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt",
-			"https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt",
 			"https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5.txt",
-			"https://openproxylist.xyz/socks5.txt",
-			"https://openproxylist.xyz/http.txt",
-			"https://spys.me/socks.txt",
-			"https://spys.me/proxy.txt",
-			"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
-			"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt"
+			"https://hoplimit.shop/proxy/ALL.txt"
 		];
-		/* WORLDWIDE / PER-COUNTRY sources. {cc} = ISO country code (or "all").
-		   proxyscrape: 3 protocols; geonode: JSON, includes port+protocol+country */
-		/* {cc} = lowercase ISO code, {CC} = uppercase (geonode needs upper,
-		   proxyscrape lower, proxifly upper) */
-		const PROXY_COUNTRY_SOURCES = [
-			"https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country={cc}",
-			"https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks4&timeout=10000&country={cc}",
-			"https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country={cc}",
-			"https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&protocols=socks5,socks4,http&country={CC}",
-			"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/{CC}/data.txt"
-		];
-		const PROXY_JSON_HOSTS = ["proxylist.geonode.com"];
+		/* proxyscrape is asked last and filters by country server-side */
+		const PROXY_COUNTRY_API = "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=";
 		/* a Worker gets ~10ms of CPU; we only ever test a few dozen proxies */
 		const WORKER_LINE_CAP = 4000;
 		if (url.pathname === "/api/proxy-list" && request.method === "POST") {
@@ -2410,9 +1936,7 @@ const Router = {
 				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
 				const body = await readJsonBody(request);
 				const limit = Math.min(Math.max(parseInt(body.limit, 10) || 60, 5), 400);
-				let country = (body.country && String(body.country).toUpperCase()) || "ALL";
-				/* AUTO / empty / garbage => worldwide pool */
-				if (country === "AUTO" || !/^[A-Z]{2}$/.test(country)) country = "ALL";
+				const country = (body.country && String(body.country).toUpperCase()) || "ALL";
 
 				/* each source gets a bounded amount of time - one dead host must
 				   never stall or kill the whole scan */
@@ -2425,104 +1949,36 @@ const Router = {
 						.then(function (t) { clearTimeout(to); return t; });
 				};
 
-				const cc = country === "ALL" ? "all" : country.toLowerCase();
-				const CC = country === "ALL" ? "" : country.toUpperCase();
-				const countryUrls = PROXY_COUNTRY_SOURCES.map(function (u) {
-					if (country === "ALL") {
-						if (u.indexOf("countries/{CC}") >= 0) return "";
-						return u.replace(/[&?]country=\{C?c\}/, "").replace("{cc}", "all");
-					}
-					return u.replace(/\{CC\}/g, CC).replace(/\{cc\}/g, cc);
-				}).filter(function (u) { return !!u; });
-				const countryUrlsCount = countryUrls.length;
-				/* panel-managed / env extra sources (GitHub raw files etc.) */
-				const extras = await lmlExtraProxyUrls(env, CC, cc, country);
-				const urls = countryUrls.concat(PUBLIC_PROXY_SOURCES, extras);
-				const hostOf = function (u) { return u.replace(/^https?:\/\//, "").split("/")[0]; };
-				const isJson = function (u) {
-					const h = hostOf(u);
-					return PROXY_JSON_HOSTS.some(function (j) { return h.indexOf(j) >= 0; });
-				};
-				/* geonode answers with a JSON array of proxies */
-				const parseJsonList = function (txt) {
-					try {
-						const data = JSON.parse(txt);
-						const rows = (data && (data.data || data.results || data.proxies)) || [];
-						const out = [];
-						for (let i = 0; i < rows.length && out.length < 600; i++) {
-							const r = rows[i] || {};
-							if (!r.ip || !r.port) continue;
-							const prot = (r.protocols && r.protocols[0]) || "socks5";
-							out.push(prot + "://" + r.ip + ":" + r.port);
-						}
-						return out.join("\n");
-					} catch (e) { return ""; }
-				};
-				/* spys.me lines look like "1.2.3.4:8080 DE-H! -" */
-				const spysToList = function (txt, want) {
-					const out = [];
-					const parts = String(txt).split("\n");
-					for (let i = 0; i < parts.length && out.length < 800; i++) {
-						const m = parts[i].trim().match(/^(\d{1,3}(?:\.\d{1,3}){3}:\d{2,5})\s+([A-Z]{2})-/);
-						if (!m) continue;
-						if (want && want !== "all" && m[2].toLowerCase() !== want) continue;
-						out.push(m[1]);
-					}
-					return out.join("\n");
-				};
-				const isSpys = function (u) { return hostOf(u).indexOf("spys.me") >= 0; };
-				const protocolFor = function (u) {
-					const l = u.toLowerCase();
-					if (l.indexOf("socks4") >= 0) return "socks4://";
-					if (l.indexOf("http") >= 0 || l.indexOf("proxy.txt") >= 0 || l.indexOf("https") >= 0) return "http://";
-					return "socks5://";
-				};
+				const urls = [PROXY_COUNTRY_API + (country === "ALL" ? "all" : country)].concat(PUBLIC_PROXY_SOURCES);
 				const texts = await Promise.all(urls.map(fetchOne));
-				for (let i = 0; i < urls.length; i++) {
-					if (!texts[i]) continue;
-					if (isJson(urls[i])) texts[i] = parseJsonList(texts[i]);
-					else if (isSpys(urls[i])) texts[i] = spysToList(texts[i], cc);
-				}
 
 				/* single pass, O(1) dedupe - the old indexOf version was O(n^2)
-				   and needed seconds of CPU on ~16k lines.
-				   Country-specific results are kept in their own bucket so a
-				   request for "TR" returns Turkish proxies first, the worldwide
-				   pool only as padding. */
+				   and needed seconds of CPU on ~16k lines */
 				const seen = new Set();
-				const countryLines = [];
-				const globalLines = [];
+				const lines = [];
 				const detail = {};
-				/* one giant list (15k lines) used to eat the whole 4000-line budget and
-				   every other source came back as 0 - give each source a fair quota */
-				const perSource = Math.max(30, Math.floor(WORKER_LINE_CAP / Math.max(1, urls.length)));
 				for (let si = 0; si < texts.length; si++) {
 					const t = texts[si];
-					const host = lmlUrlKey(urls[si]);
-					if (!t) { if (!detail[host]) detail[host] = 0; continue; }
-					const parts = String(t.length > 600000 ? t.slice(0, 600000) : t).split("\n");
-					const protoPrefix = protocolFor(urls[si]);
-					const bucket = si < countryUrlsCount ? countryLines : globalLines;
-					let quota = si < countryUrlsCount ? Math.max(perSource, 200) : perSource;
+					const host = urls[si].replace(/^https?:\/\//, "").split("/")[0];
+					if (!t) { detail[host] = 0; continue; }
+					const parts = String(t).split("\n");
 					let got = 0;
-					for (let k = 0; k < parts.length && quota > 0 && (countryLines.length + globalLines.length) < WORKER_LINE_CAP; k++) {
+					for (let k = 0; k < parts.length && lines.length < WORKER_LINE_CAP; k++) {
 						let l = parts[k].trim();
 						if (l.length <= 5 || l.length >= 120) continue;
 						if (/^(socks4|socks5|socks|http|https|tg):\/\//i.test(l) || l.indexOf("t.me/socks") >= 0) {
 							/* already a full url */
 						} else if (/^\d{1,3}(\.\d{1,3}){3}:\d{2,5}$/.test(l)) {
-							l = protoPrefix + l;
+							l = "socks5://" + l;
 						} else continue;
 						if (seen.has(l)) continue;
 						seen.add(l);
-						bucket.push(l); got++; quota--;
+						lines.push(l); got++;
 					}
-					detail[host] = (detail[host] || 0) + got;
+					detail[host] = got;
 				}
-				const shuffle = function (arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp; } return arr; };
-				const lines = shuffle(countryLines).concat(shuffle(globalLines));
 				for (let i = lines.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const tmp = lines[i]; lines[i] = lines[j]; lines[j] = tmp; }
-				return new Response(JSON.stringify({ success: true, total: lines.length, country: country, detail: detail, capped: lines.length >= WORKER_LINE_CAP, per_source: perSource, proxies: lines.slice(0, limit) }), { headers: { "Content-Type": "application/json" } });
+				return new Response(JSON.stringify({ success: true, total: lines.length, country: country, detail: detail, proxies: lines.slice(0, limit) }), { headers: { "Content-Type": "application/json" } });
 			} catch (e) {
 				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
 			}
@@ -3081,8 +2537,7 @@ const Router = {
 				const dbTokenRow = await env.DB.prepare("SELECT value FROM settings WHERE key = 'cf_token'").first();
 				const hasToken = !!env.CF_API_TOKEN || !!(dbTokenRow && dbTokenRow.value);
 				const autoUpdateRow = await env.DB.prepare("SELECT value FROM settings WHERE key = 'auto_update'").first();
-				const lmlAutoRow = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_update_auto'").first();
-				const isAutoUpdateEnabled = lmlAutoRow ? lmlAutoRow.value !== "0" : (autoUpdateRow ? autoUpdateRow.value === "1" : true);
+				const isAutoUpdateEnabled = autoUpdateRow ? autoUpdateRow.value === "1" : true;
 				const accNameRow = await env.DB.prepare("SELECT value FROM settings WHERE key = 'cf_account_name'").first();
 				return new Response(JSON.stringify({ has_token: hasToken, auto_update: isAutoUpdateEnabled, account: accNameRow ? accNameRow.value : null }), { headers: { "Content-Type": "application/json" } });
 			}
@@ -3109,7 +2564,6 @@ const Router = {
 				} catch (e) { }
 				await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('cf_token', ?)").bind(token).run();
 				await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('auto_update', '1')").run();
-				await lmlUpdPut(env, LML_UPD_KEYS.auto, "1");
 				if (accountId) await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('cf_account_id', ?)").bind(accountId).run();
 				if (accountName) await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('cf_account_name', ?)").bind(accountName).run();
 				return new Response(JSON.stringify({ success: true, account: accountName, account_id: accountId }), { headers: { "Content-Type": "application/json" } });
@@ -3119,7 +2573,6 @@ const Router = {
 			}
 			if (body.action === "disable") {
 				await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('auto_update', '0')").run();
-				await lmlUpdPut(env, LML_UPD_KEYS.auto, "0");
 				return new Response(JSON.stringify({ success: true }), { headers: { "Content-Type": "application/json" } });
 			}
 		}
@@ -3138,6 +2591,8 @@ const Router = {
 				GLOBAL_LAST_REQ_WRITE = 0;
 				GLOBAL_IPS_CACHE = {};
 				GLOBAL_IPS_LAST_FETCH = 0;
+				PROXY_CC_CACHE.clear();
+				LML_LIVE_IPS_CACHE = { at: 0, ips: null };
 				cachedVipCountries = [];
 				lastVipCountriesFetch = 0;
 				CF_USAGE_CACHE = null;
@@ -3150,104 +2605,120 @@ const Router = {
 				return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
 			}
 		}
-		/* ============ AUTOMATIC SELF-UPDATE API ============
-		   GET  /api/self-update            -> status + settings
-		   POST /api/self-update            -> save {auto, source, interval, keep_patches}
-		   POST /api/self-update/check      -> run the engine now
-		   POST /api/self-update/rollback   -> restore the cached previous build */
-		if (url.pathname === "/api/self-update" && request.method === "GET") {
+		/* ================= UPDATE CHECK (GitHub) ================= */
+		if (url.pathname === "/api/update-check" && request.method === "GET") {
 			try {
 				const session = await DbService.getSession(request, env);
 				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const st = await lmlUpdLoad(env);
-				const hostLabel = String(url.hostname || "").split(".")[0];
-				if (!st[LML_UPD_KEYS.script] && hostLabel && hostLabel !== "localhost") {
-					st[LML_UPD_KEYS.script] = hostLabel;
-					await lmlUpdPut(env, LML_UPD_KEYS.script, hostLabel);
+				const now = Date.now();
+				if (!LML_UPDATE_CHECK_CACHE || now - LML_UPDATE_CHECK_CACHE.at > 300000) {
+					const code = await fetchUpdateSourceWorker();
+					const m = code ? code.match(/CURRENT_VERSION\s*=\s*['"]([0-9][0-9A-Za-z.\-_]*)['"]/) : null;
+					LML_UPDATE_CHECK_CACHE = {
+						at: now,
+						source: !!code,
+						latest: m ? m[1] : (LML_PANEL_VERSION),
+						size: code ? code.length : 0
+					};
 				}
-				const scriptName = (env && env.WORKER_NAME) || st[LML_UPD_KEYS.script] || hostLabel || "";
-				const last = parseInt(st[LML_UPD_KEYS.lastCheck] || "0", 10) || 0;
-				const iv = Math.min(Math.max(parseInt(st[LML_UPD_KEYS.interval], 10) || 1800, 300), 86400);
-				const prev = await lmlUpdBackupRead();
+				const latest = LML_UPDATE_CHECK_CACHE.latest;
+				const cmp = lmlVersionCompare(latest, LML_PANEL_VERSION);
 				return new Response(JSON.stringify({
 					success: true,
-					current_version: LML_BUILD,
-					applied_version: st[LML_UPD_KEYS.version] || "",
-					applied_at: st[LML_UPD_KEYS.appliedAt] || "",
-					auto: st[LML_UPD_KEYS.auto] !== "0",
-					source: st[LML_UPD_KEYS.source] || "",
-					env_source: (env && env.LML_UPDATE_SOURCE) ? "set" : "",
-					interval: iv,
-					last_check: last,
-					next_in: last ? Math.max(0, Math.round((last + iv * 1000 - Date.now()) / 1000)) : 0,
-					last_msg: st[LML_UPD_KEYS.lastMsg] || "",
-					fails: parseInt(st[LML_UPD_KEYS.fails], 10) || 0,
-					script_name: scriptName,
-					has_token: !!(st.cf_token || (env && env.CF_API_TOKEN)),
-					keep_patches: st[LML_UPD_KEYS.keepPatches] !== "0",
-					rollback_ready: !!prev,
-					updater: "auto"
-				}), { headers: { "Content-Type": "application/json; charset=utf-8" } });
+					current: LML_PANEL_VERSION,
+					latest: latest,
+					has_update: cmp > 0,
+					source_ok: LML_UPDATE_CHECK_CACHE.source,
+					size: LML_UPDATE_CHECK_CACHE.size
+				}), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 			} catch (e) {
 				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } });
 			}
 		}
-		if (url.pathname === "/api/self-update" && request.method === "POST") {
-			try {
-				const session = await DbService.getSession(request, env);
-				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const body = await readJsonBody(request);
-				if (body.auto !== undefined) await lmlUpdPut(env, LML_UPD_KEYS.auto, body.auto ? "1" : "0");
-				if (body.source !== undefined) await lmlUpdPut(env, LML_UPD_KEYS.source, String(body.source || "").trim().slice(0, 400));
-				if (body.interval !== undefined) await lmlUpdPut(env, LML_UPD_KEYS.interval, Math.min(Math.max(parseInt(body.interval, 10) || 1800, 300), 86400));
-				if (body.keep_patches !== undefined) await lmlUpdPut(env, LML_UPD_KEYS.keepPatches, body.keep_patches ? "1" : "0");
-				if (body.worker_name !== undefined) await lmlUpdPut(env, LML_UPD_KEYS.script, String(body.worker_name || "").trim().slice(0, 64));
-				return new Response(JSON.stringify({ success: true }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-			} catch (e) {
-				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } });
-			}
-		}
-		if (url.pathname === "/api/self-update/check" && request.method === "POST") {
-			try {
-				const session = await DbService.getSession(request, env);
-				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const body = await readJsonBody(request);
-				const mode = (body && body.apply === false) ? "check" : "force";
-				const out = await lmlUpdRun(env, ctx, mode);
-				return new Response(JSON.stringify(Object.assign({ success: true }, out)), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-			} catch (e) {
-				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } });
-			}
-		}
-		if (url.pathname === "/api/self-update/rollback" && request.method === "POST") {
-			try {
-				const session = await DbService.getSession(request, env);
-				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const st = await lmlUpdLoad(env);
-				const prev = await lmlUpdBackupRead();
-				if (!prev) return new Response(JSON.stringify({ success: false, error: "نسخه‌ای برای برگشت ذخیره نشده" }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const pre = lmlUpdPreflight(prev);
-				if (!pre.ok) return new Response(JSON.stringify({ success: false, error: "نسخهٔ ذخیره‌شده سالم نیست: " + pre.reason }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const dep = await lmlUpdDeploy(env, prev, "", st);
-				if (!dep.ok) return new Response(JSON.stringify({ success: false, error: dep.reason }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-				await lmlUpdPut(env, LML_UPD_KEYS.hash, await lmlUpdHash(prev));
-				await lmlUpdNotify(env, "↩️ <b>LML به نسخهٔ قبلی برگشت</b>", st);
-				return new Response(JSON.stringify({ success: true, rolled_back: true }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-			} catch (e) {
-				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } });
-			}
-		}
+
 		if (url.pathname === "/api/update-panel" && request.method === "POST") {
-			/* kept as an alias: runs the automatic engine (validate + deploy + report) */
+            /* v1.0.4: آپدیت خودکار از گیت‌هاب دوباره فعال شد (با تأیید کاربر در پنل) */
+			const body = await request.json().catch(() => ({}));
+			const dbTokenRow = await env.DB.prepare("SELECT value FROM settings WHERE key = 'cf_token'").first();
+			let currentToken = env.CF_API_TOKEN || (dbTokenRow ? dbTokenRow.value : null) || body.cf_token || null;
+			let currentAccountId = env.CF_ACCOUNT_ID;
+			if (!currentToken) {
+				return new Response(JSON.stringify({ error: "TOKEN_REQUIRED" }), { status: 400, headers: { "Content-Type": "application/json" } });
+			}
 			try {
-				const session = await DbService.getSession(request, env);
-				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				const out = await lmlUpdRun(env, ctx, "force");
-				if (out && out.rejected) return new Response(JSON.stringify({ error: "نسخهٔ جدید رد شد: " + out.reason }), { status: 422, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				if (out && out.ok === false && out.reason) return new Response(JSON.stringify({ error: out.reason }), { status: 400, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				return new Response(JSON.stringify({ success: true, result: out }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-			} catch (e) {
-				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				const cfHeaders = {
+					Authorization: "Bearer " + currentToken,
+					"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) LMLPanel/1.0",
+				};
+				if (!currentAccountId) {
+					const accRes = await fetch("https://api.cloudflare.com/client/v4/accounts", { headers: cfHeaders });
+					if (!accRes.ok) throw new Error("کلودفلر درخواست اکانت را رد کرد (وضعیت: " + accRes.status + ")");
+					const accData = await accRes.json().catch(() => ({}));
+					if (!accData.success || !accData.result || accData.result.length === 0) throw new Error("توکن نامعتبر است یا اکانتی یافت نشد.");
+					currentAccountId = accData.result[0].id;
+				}
+				let newCode = await fetchUpdateSourceWorker();
+				if (!newCode) {
+					const githubRes = await fetchWithFallback("worker.js?t=" + Date.now(), {
+						headers: {
+							"User-Agent": "Mozilla/5.0",
+							"Cache-Control": "no-cache",
+						},
+					});
+					if (!githubRes.ok) throw new Error("خطا در دریافت سورس جدید از گیت‌هاب (وضعیت: " + githubRes.status + ")");
+					newCode = await githubRes.text();
+				}
+				if (newCode.indexOf("LML_PANEL_VERSION") < 0 || newCode.indexOf("lmlOnlyCfIps") < 0 || newCode.indexOf("lmlCopy") < 0) {
+					throw new Error("نسخه‌ی گیت‌هاب ساختار «بدون خطای SSL» را ندارد؛ ابتدا همین فایل را در مخزن با نام worker.js جایگزین کنید.");
+				}
+				const scriptName = env.WORKER_NAME || url.hostname.split(".")[0];
+				const bindingsRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${currentAccountId}/workers/scripts/${scriptName}/bindings`, {
+					headers: cfHeaders,
+				});
+				if (!bindingsRes.ok) throw new Error("عدم دسترسی به تنظیمات ورکر. کلودفلر خطا داد (وضعیت: " + bindingsRes.status + ")");
+				const bindingsData = await bindingsRes.json().catch(() => ({}));
+				if (!bindingsData.success) throw new Error("توکن فاقد دسترسی ویرایش ورکر است.");
+				const newBindings = [];
+				for (const b of bindingsData.result || []) {
+					if (b.name === "CF_API_TOKEN" || b.name === "CF_ACCOUNT_ID") continue;
+					if (b.type === "d1") {
+						newBindings.push({ type: "d1", name: b.name, id: b.database_id || b.id });
+					} else if (b.type === "kv_namespace") {
+						newBindings.push({ type: "kv_namespace", name: b.name, namespace_id: b.namespace_id || b.id });
+					} else if (b.type === "plain_text") {
+						newBindings.push({ type: "plain_text", name: b.name, text: b.text || "" });
+					} else if (b.type !== "secret_text") {
+						newBindings.push(b);
+					}
+				}
+				newBindings.push({ type: "secret_text", name: "CF_API_TOKEN", text: currentToken });
+				newBindings.push({ type: "secret_text", name: "CF_ACCOUNT_ID", text: currentAccountId });
+				const metadata = {
+					main_module: "worker.js",
+					compatibility_date: "2026-07-10",
+					compatibility_flags: ["nodejs_compat"],
+					bindings: newBindings,
+				};
+				const formData = new FormData();
+				formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }), "metadata.json");
+				formData.append("worker.js", new Blob([newCode], { type: "application/javascript+module" }), "worker.js");
+				const deployRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${currentAccountId}/workers/scripts/${scriptName}`, {
+					method: "PUT",
+					headers: cfHeaders,
+					body: formData,
+				});
+				if (!deployRes.ok) {
+					const errText = await deployRes.text().catch(() => "");
+					throw new Error("خطای کلودفلر هنگام دیپلوی (" + deployRes.status + "): " + errText.substring(0, 150));
+				}
+				const deployData = await deployRes.json().catch(() => ({}));
+				if (!deployData.success) {
+					const cfError = deployData.errors && deployData.errors.length > 0 ? deployData.errors[0].message : "خطا در اعمال آپدیت.";
+					throw new Error(cfError);
+				}
+				return new Response(JSON.stringify({ success: true }), { headers: { "Content-Type": "application/json" } });
+			} catch (err) {
+				return new Response(JSON.stringify({ error: err.message }), { status: 400, headers: { "Content-Type": "application/json" } });
 			}
 		}
 		if (url.pathname === "/api/change-password" && request.method === "POST") {
@@ -3527,19 +2998,26 @@ const Router = {
 						}
 						const { results } = await userStmt.all();
 						const now = Date.now();
-						const cachedIpsData = (results || []).some(u=>u.auto_rotate_ip===1) ? await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null, env) : {};
+						const cachedIpsData = (results || []).some(u=>u.auto_rotate_ip===1) ? await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null) : {};
+
+						const liveIpsAll = await getLiveIps(typeof ctx !== "undefined" && ctx ? ctx : null);
 						const enrichedUsers = (results || []).map((user) => {
-							let finalIps = user.ips;
+							/* IP-FREE: آی‌پی‌های خود کاربر همیشه اول و ثابت است؛ زنده و چرخش فقط اضافه می‌شوند */
+							const ownIpsList = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
+							const mergedIps = ownIpsList.concat(liveIpsAll.filter(function (ip) { return ownIpsList.indexOf(ip) < 0; }));
 							if (user.auto_rotate_ip === 1) {
 								const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
-								if (randomIps.length > 0) finalIps = randomIps.join("\n");
+								randomIps.forEach(function (ip) { if (mergedIps.indexOf(ip) < 0) mergedIps.push(ip); });
 							}
+							const finalIps = user.ips;
 							const userIpsMap = GLOBAL_ACTIVE_IPS.get(user.username);
 							const liveIpCount = userIpsMap ? userIpsMap.size : 0;
 							const currentOnlineCount = Math.max(liveIpCount, getActiveIpCount(user.active_ips));
-							return {
+								return {
 								...user,
 								ips: finalIps,
+								ips_valid: lmlOnlyCfIps(mergedIps, 40),
+								ip_ssl_checked: true,
 								used_gb: (user.used_gb || 0) + ((GLOBAL_TRAFFIC_CACHE.get(user.username) || 0) / (1024 * 1024 * 1024)),
 								used_req: (user.used_req || 0) + (USER_REQ_CACHE.get(user.username) || 0),
 								is_online: currentOnlineCount > 0 ? 1 : 0,
@@ -3700,6 +3178,7 @@ const DbService = {
 			try {
 				await db.prepare("CREATE TABLE IF NOT EXISTS resellers (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password_hash TEXT, credit_gb REAL DEFAULT 100, used_gb REAL DEFAULT 0, max_users INTEGER DEFAULT 50, is_active INTEGER DEFAULT 1, note TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)").run();
 			} catch (e) { }
+
 			try {
 				const { results } = await db.prepare("PRAGMA table_info(users)").all();
 				const existingCols = new Set((results || []).map((r) => r.name));
@@ -3963,7 +3442,7 @@ function renderUserPortal(user, host, url) {
 			</div>
 			
 			<div class="flex gap-2 mt-2">
-				<button onclick="navigator.clipboard.writeText('${subUrl}').then(() => alert('✅ لینک سابسکریپشن با موفقیت کپی شد!'))" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-black transition active:scale-95 shadow-lg shadow-blue-600/30 flex items-center justify-center gap-1.5 cursor-pointer">
+				<button onclick="lmlCopy('${subUrl}')" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-black transition active:scale-95 shadow-lg shadow-blue-600/30 flex items-center justify-center gap-1.5 cursor-pointer">
 					<span>📋 کپی لینک هوشمند VLESS</span>
 				</button>
 				<button onclick="document.getElementById('qr-box').classList.toggle('hidden')" class="px-4 py-2.5 bg-[#0e1e35] hover:bg-[#132742] border border-[rgba(59,130,246,0.3)] text-blue-300 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer">
@@ -4042,272 +3521,155 @@ function renderUserPortal(user, host, url) {
 </html>`;
 }
 
-/* ============================================================
-   SMART SUBSCRIPTION NODES
-   The Clash / sing-box outputs used to contain only two nodes that
-   pointed at the Worker host itself. Now they contain every real
-   candidate — clean IP x TLS port x proxy location (loc-N) — so the
-   client can url-test/fallback automatically instead of the user
-   guessing which single link works today.
-   ============================================================ */
-function lmlSubLocList(user) {
-	let proxyList = [];
-	try {
-		if (user.user_socks5 && String(user.user_socks5).trim().startsWith("[")) proxyList = JSON.parse(user.user_socks5);
-		else if (user.user_socks5 || user.user_proxy_ip) proxyList = [user.user_socks5 || user.user_proxy_ip];
-	} catch (e) {
-		proxyList = [user.user_socks5 || user.user_proxy_ip];
-	}
-	if (!Array.isArray(proxyList)) proxyList = [user.user_socks5 || user.user_proxy_ip];
-	const allowDirect = user.enable_direct !== 0;
-	if (allowDirect) {
-		const hasDirect = proxyList.some(function (p) { return p === null || p === ""; });
-		if (!hasDirect) proxyList.push(null);
-	} else {
-		proxyList = proxyList.filter(function (p) { return p !== null && p !== ""; });
-	}
-	if (!proxyList.length) proxyList = [null];
-	const basePath = "/stream/LML_PANEL/" + ((user.uuid || "").split("-")[4] || "default");
-	return proxyList.map(function (item, idx) {
-		const isDirect = item === null || item === "";
-		let cc = "";
-		if (!isDirect && item && typeof item === "object") cc = String(item.country || "").toUpperCase();
-		return {
-			idx: idx,
-			isDirect: isDirect,
-			country: cc,
-			label: isDirect ? "DIRECT" : (cc ? (lmlFlagOf(cc) + " " + cc + "-" + idx) : ("LOC-" + idx)),
-			path: basePath + (isDirect ? "" : ("/loc-" + idx))
-		};
-	});
-}
-function lmlFlagOf(cc) {
-	try {
-		const code = String(cc || "").trim().toUpperCase();
-		if (!/^[A-Z]{2}$/.test(code)) return String.fromCodePoint(0x1F310);
-		return String.fromCodePoint.apply(null, code.split("").map(function (c) { return 127397 + c.charCodeAt(0); }));
-	} catch (e) { return String.fromCodePoint(0x1F310); }
-}
-async function lmlSubNodes(user, host, ctx) {
-	let ips = [host];
-	try {
-		if (user.auto_rotate_ip === 1) {
-			const cached = await getCachedIps(ctx || null, env);
-			const picked = getRandomIps(cached, user.ip_operator || "all", user.ip_count || 12);
-			if (picked && picked.length) ips = picked;
-		}
-	} catch (e) { }
-	if (ips.length === 1 && ips[0] === host && user.ips) {
-		const parsed = String(user.ips).split("\n").map(function (x) { return x.trim(); }).filter(Boolean);
-		if (parsed.length) ips = parsed;
-	}
-	let ports = String(user.port || "443").split(",").map(function (x) { return x.trim(); })
-		.filter(function (x) { return x && TLS_PORTS.has(x); });
-	if (!ports.length) ports = ["443"];
-	const locs = lmlSubLocList(user);
-	const budget = 120;
-	const perLoc = Math.max(3, Math.floor(budget / locs.length));
-	const nodes = [];
-	for (let li = 0; li < locs.length && nodes.length < budget; li++) {
-		const loc = locs[li];
-		let added = 0;
-		for (let pi = 0; pi < ports.length && added < perLoc && nodes.length < budget; pi++) {
-			for (let ii = 0; ii < ips.length && added < perLoc && nodes.length < budget; ii++) {
-				nodes.push({
-					ip: ips[ii],
-					port: parseInt(ports[pi], 10) || 443,
-					loc: loc,
-					name: loc.label + " · " + ips[ii] + ":" + ports[pi]
-				});
-				added++;
-			}
-		}
-	}
-	return { nodes: nodes, host: host, uuid: user.uuid, fp: user.fingerprint || "chrome", locs: locs };
-}
-function lmlSubHeaders(user, host) {
-	/* Clash/sing-box UIs show remaining traffic and expiry from these headers,
-	   and re-fetch the subscription themselves (profile-update-interval hours). */
-	let used = Number(user.used_gb || 0);
-	try {
-		const live = GLOBAL_TRAFFIC_CACHE.get(user.username);
-		if (live) used += (live / (1024 * 1024 * 1024));
-	} catch (e) { }
-	const limit = Number(user.limit_gb || 0);
-	let expire = 0;
-	try {
-		const base = (user.start_on_first_connect === 1 && user.first_connection_time) ? user.first_connection_time : (user.created_at ? Date.parse(user.created_at) : 0);
-		if (base && user.expiry_days) expire = Math.floor((base + user.expiry_days * 86400000) / 1000);
-	} catch (e) { }
-	const headers = {
-		"profile-update-interval": "1",
-		"profile-web-page-url": "https://" + host + "/status/" + encodeURIComponent(user.username || "")
-	};
-	headers["Subscription-Userinfo"] = "upload=0; download=" + Math.max(0, Math.round(used * 1073741824)) +
-		"; total=" + Math.max(0, Math.round(limit * 1073741824)) + "; expire=" + expire;
-	return headers;
-}
-function lmlYamlStr(v) {
-	return '"' + String(v == null ? "" : v).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
-}
 const SubscriptionService = {
-	async generateClash(user, host, ctx) {
-		const pack = await lmlSubNodes(user, host, ctx);
-		const names = pack.nodes.map(function (n) { return n.name; });
-		const lines = [];
-		lines.push("# LML smart subscription - auto url-test over clean IPs, TLS ports and proxy locations");
-		lines.push("# generated: " + new Date().toISOString() + " | user: " + user.username);
-		lines.push("mixed-port: 7890", "allow-lan: false", "mode: rule", "log-level: warning",
-			"unified-delay: true", "tcp-concurrent: true", "find-process-mode: off", "ipv6: false");
-		lines.push("");
-		lines.push("dns:");
-		lines.push("  enable: true");
-		lines.push("  ipv6: false");
-		lines.push("  enhanced-mode: fake-ip");
-		lines.push("  fake-ip-range: 198.18.0.1/16");
-		lines.push("  nameserver:");
-		lines.push("    - https://1.1.1.1/dns-query");
-		lines.push("    - https://8.8.8.8/dns-query");
-		lines.push("");
-		lines.push("proxies:");
-		pack.nodes.forEach(function (n) {
-			lines.push("  - name: " + lmlYamlStr(n.name));
-			lines.push("    type: vless");
-			lines.push("    server: " + lmlYamlStr(n.ip));
-			lines.push("    port: " + n.port);
-			lines.push("    uuid: " + lmlYamlStr(pack.uuid));
-			lines.push("    udp: true");
-			lines.push("    tls: true");
-			lines.push("    skip-cert-verify: false");
-			lines.push("    servername: " + lmlYamlStr(host));
-			lines.push("    client-fingerprint: " + lmlYamlStr(pack.fp));
-			lines.push("    network: ws");
-			lines.push("    ws-opts:");
-			lines.push("      path: " + lmlYamlStr(n.loc.path));
-			lines.push("      headers:");
-			lines.push("        Host: " + lmlYamlStr(host));
-		});
-		lines.push("");
-		lines.push("proxy-groups:");
-		lines.push("  - name: " + lmlYamlStr("LML-AUTO (url-test)"));
-		lines.push("    type: url-test");
-		lines.push("    url: " + lmlYamlStr("http://cp.cloudflare.com/generate_204"));
-		lines.push("    interval: 60");
-		lines.push("    tolerance: 50");
-		lines.push("    lazy: false");
-		lines.push("    proxies: [" + names.map(lmlYamlStr).join(", ") + "]");
-		lines.push("  - name: " + lmlYamlStr("LML-FALLBACK"));
-		lines.push("    type: fallback");
-		lines.push("    url: " + lmlYamlStr("http://cp.cloudflare.com/generate_204"));
-		lines.push("    interval: 60");
-		lines.push("    proxies: [" + names.map(lmlYamlStr).join(", ") + "]");
-		lines.push("  - name: " + lmlYamlStr("LML-SELECT"));
-		lines.push("    type: select");
-		lines.push("    proxies: [" + [lmlYamlStr("LML-AUTO (url-test)"), lmlYamlStr("LML-FALLBACK")].concat(names.map(lmlYamlStr)).concat(["DIRECT"]).join(", ") + "]");
-		lines.push("");
-		lines.push("rules:");
-		lines.push("  - GEOIP,IR,DIRECT");
-		lines.push("  - DOMAIN-SUFFIX,ir,DIRECT");
-		lines.push("  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve");
-		lines.push("  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve");
-		lines.push("  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve");
-		lines.push("  - DOMAIN-SUFFIX,local,DIRECT");
-		lines.push("  - MATCH," + "LML-SELECT");
-		lines.push("");
-		const clashHeaders = Object.assign({
-			"Content-Type": "text/yaml; charset=utf-8",
-			"Content-Disposition": 'inline; filename="lml-clash.yaml"',
-			"Cache-Control": "no-store"
-		}, lmlSubHeaders(user, host));
-		return new Response(lines.join("\n"), { headers: clashHeaders });
-	},
-	async generateSingbox(user, host, ctx) {
-		const pack = await lmlSubNodes(user, host, ctx);
-		const names = pack.nodes.map(function (n) { return n.name; });
-		const outbounds = pack.nodes.map(function (n) {
-			return {
-				"type": "vless",
-				"tag": n.name,
-				"server": n.ip,
-				"server_port": n.port,
-				"uuid": pack.uuid,
-				"tls": {
-					"enabled": true,
-					"server_name": host,
-					"utls": { "enabled": true, "fingerprint": pack.fp },
-					"fragment": { "packets": "10-20", "length": "10-30", "mode": "random" }
-				},
-				"transport": {
-					"type": "ws",
-					"path": n.loc.path,
-					"headers": { "Host": host }
-				}
-			};
-		});
-		outbounds.push({
-			"type": "urltest",
-			"tag": "LML-AUTO",
-			"outbounds": names,
-			"url": "http://cp.cloudflare.com/generate_204",
-			"interval": "1m",
-			"tolerance": 50
-		});
-		outbounds.push({
-			"type": "selector",
-			"tag": "LML-SELECT",
-			"outbounds": ["LML-AUTO"].concat(names).concat(["direct"]),
-			"default": "LML-AUTO"
-		});
-		outbounds.push({ "type": "direct", "tag": "direct" });
-		outbounds.push({ "type": "block", "tag": "block" });
-		const config = {
-			"log": { "level": "warn" },
-			"dns": {
-				"servers": [
-					{ "tag": "cf", "address": "https://1.1.1.1/dns-query", "detour": "LML-AUTO" },
-					{ "tag": "local", "address": "local", "detour": "direct" }
-				],
-				"rules": [{ "outbound": "any", "server": "local" }],
-				"strategy": "prefer_ipv4"
-			},
-			"inbounds": [
-				{ "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080, "sniff": true, "sniff_override_destination": false }
-			],
-			"outbounds": outbounds,
-			"route": {
-				"rules": [
-					{ "ip_is_private": true, "outbound": "direct" },
-					{ "geoip": ["ir"], "outbound": "direct" },
-					{ "geosite": ["ir"], "outbound": "direct" },
-					{ "outbound": "LML-SELECT" }
-				],
-				"auto_detect_interface": true,
-				"final": "LML-SELECT"
+	async generateClash(user, host) {
+		const uuid = user.uuid;
+		const path = "/stream/LML_PANEL/" + ((uuid || "").split("-")[4] || "default");
+		const yaml = `port: 7890
+socks-port: 7891
+allow-lan: true
+mode: rule
+log-level: info
+unified-delay: true
+tcp-concurrent: true
+
+dns:
+  enable: true
+  listen: 0.0.0.0:53
+  enhanced-mode: fake-ip
+  nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+
+proxies:
+  - name: "⚡ LML ❯ AUTO-CORE"
+    type: vless
+    server: ${host}
+    port: 443
+    uuid: ${uuid}
+    network: ws
+    tls: true
+    udp: true
+    skip-cert-verify: false
+    servername: ${host}
+    ws-opts:
+      path: "${path}"
+      headers:
+        Host: "${host}"
+  - name: "🛡️ LML ❯ PORT-2053"
+    type: vless
+    server: ${host}
+    port: 2053
+    uuid: ${uuid}
+    network: ws
+    tls: true
+    udp: true
+    skip-cert-verify: false
+    servername: ${host}
+    ws-opts:
+      path: "${path}"
+      headers:
+        Host: "${host}"
+
+proxy-groups:
+  - name: "🚀 LML-PROXY"
+    type: select
+    proxies:
+      - "⚡ LML ❯ AUTO-CORE"
+      - "🛡️ LML ❯ PORT-2053"
+      - DIRECT
+
+rules:
+  - GEOIP,IR,DIRECT
+  - DOMAIN-SUFFIX,ir,DIRECT
+  - MATCH,🚀 LML-PROXY
+`;
+		return new Response(yaml, {
+			headers: {
+				"Content-Type": "text/yaml; charset=utf-8",
+				"Content-Disposition": 'inline; filename="lml-clash.yaml"'
 			}
-		};
-		const sbHeaders = Object.assign({
-			"Content-Type": "application/json; charset=utf-8",
-			"Content-Disposition": 'inline; filename="lml-singbox.json"',
-			"Cache-Control": "no-store"
-		}, lmlSubHeaders(user, host));
-		return new Response(JSON.stringify(config, null, 2), { headers: sbHeaders });
+		});
 	},
 
-	async generateText(user, host, ctx = null) {
+	async generateSingbox(user, host) {
+		const uuid = user.uuid;
+		const path = "/stream/LML_PANEL/" + ((uuid || "").split("-")[4] || "default");
+		const config = {
+			"log": { "level": "info" },
+			"inbounds": [
+				{ "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080 }
+			],
+			"outbounds": [
+				{
+					"type": "vless",
+					"tag": "⚡ LML-OUTBOUND",
+					"server": host,
+					"server_port": 443,
+					"uuid": uuid,
+					"tls": {
+						"enabled": true,
+						"server_name": host,
+						"utls": { "enabled": true, "fingerprint": "chrome" },
+						"fragment": { "packets": "10-20", "length": "10-30", "mode": "random" }
+					},
+					"transport": {
+						"type": "ws",
+						"path": path,
+						"headers": { "Host": host }
+					}
+				},
+				{ "type": "direct", "tag": "direct" },
+				{ "type": "block", "tag": "block" }
+			],
+			"route": {
+				"rules": [
+					{ "geoip": ["ir"], "outbound": "direct" },
+					{ "geosite": ["ir"], "outbound": "direct" },
+					{ "outbound": "⚡ LML-OUTBOUND" }
+				]
+			}
+		};
+		return new Response(JSON.stringify(config, null, 2), {
+			headers: {
+				"Content-Type": "application/json; charset=utf-8",
+				"Content-Disposition": 'inline; filename="lml-singbox.json"'
+			}
+		});
+	},
+
+	async generateText(user, host, ctx = null, env = null, coloHint = "") {
 		const _AI_BLOCKER = atob("TE1MX1BBTkVMX0NPUkVfU1lTVEVNX1JFQURZ");
 		let ips = [host];
-		if (user.auto_rotate_ip === 1) {
-			const cachedIpsData = await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null, env);
-			const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
-			if (randomIps.length > 0) ips = randomIps;
-		}
-		if (ips.length === 1 && ips[0] === host && user.ips && _AI_BLOCKER.length > 0) {
-			const parsedIps = user.ips
+		/* IP-FREE: اول آی‌پی‌های خود کاربر، بعد آی‌پی‌های زنده‌ی گیت‌هاب؛ چرخش خودکار فقط «اضافه» می‌کند */
+		let parsedUserIps = [];
+		if (user.ips && _AI_BLOCKER.length > 0) {
+			parsedUserIps = String(user.ips)
 				.split("\n")
 				.map((ip) => ip.trim())
 				.filter((ip) => ip.length > 0);
-			if (parsedIps.length > 0) ips = parsedIps;
 		}
+		const liveIpsGt = await getLiveIps(typeof ctx !== "undefined" && ctx ? ctx : null);
+		if (parsedUserIps.length > 0 || liveIpsGt.length > 0) {
+			ips = parsedUserIps.concat(liveIpsGt.filter((ip) => parsedUserIps.indexOf(ip) < 0));
+		}
+		if (user.auto_rotate_ip === 1) {
+			const cachedIpsData = await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null);
+			const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
+			randomIps.forEach((ip) => { if (ips.indexOf(ip) < 0 && ip !== host) ips.push(ip); });
+		}
+		if (!ips.length) ips = [host];
+		/* ---- IP-FREE: آی‌پی‌های کاربر مستقیم در لینک TLS (با SNI=دامنه)؛ بدون بررسی رنج ---- */
+		const lmlHost = await lmlPanelHostResolve(env, host);
+		let lmlCleanIps = [];
+		{
+			const wantCount = Math.max(1, Math.min(parseInt(user.ip_count, 10) || 20, 40));
+			const rawIps = ips.filter(function (x) { return String(x).trim() && String(x).trim().toLowerCase() !== String(lmlHost).toLowerCase(); });
+			if (rawIps.length) {
+				lmlCleanIps = lmlOnlyCfIps(rawIps, wantCount);
+			}
+		}
+		const lmlIpFlag = coloHint ? (lmlFlagEmoji(lmlColoCountry(coloHint)) + " ") : "";
 		let ports = String(user.port || "443")
 			.split(",")
 			.map((p) => p.trim())
@@ -4380,6 +3742,10 @@ const SubscriptionService = {
 			let proxyStr = typeof proxyItem === "object" && proxyItem !== null ? proxyItem.proxy : proxyItem;
 			let countryCode = typeof proxyItem === "object" && proxyItem !== null ? proxyItem.country : user.user_proxy_iata || "";
 			if (!countryCode && proxyStr) {
+				const ccCached = PROXY_CC_CACHE.get(proxyStr);
+				if (ccCached && (Date.now() - ccCached.at) < 86400000) countryCode = ccCached.cc;
+			}
+			if (!countryCode && proxyStr) {
 				try {
 					const payload = new TextEncoder().encode("GET /json/?fields=countryCode HTTP/1.1\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n");
 					const s = await connectProxy(proxyStr, "ip-api.com", 80, payload);
@@ -4427,6 +3793,7 @@ const SubscriptionService = {
 						} catch (e) { }
 					}
 				}
+				if (countryCode) { try { PROXY_CC_CACHE.set(proxyStr, { cc: countryCode, at: Date.now() }); } catch (e) { } }
 			}
 			let flagEmoji = "🌐";
 			if (countryCode) {
@@ -4445,10 +3812,22 @@ const SubscriptionService = {
 		const enableVless = connType.includes("vless") || connType === "vl" + "e" + "ss" || (!connType.includes("trojan") && !connType.includes("shadowsocks"));
 		const enableTrojan = connType.includes("trojan");
 		const enableSS = connType.includes("shadowsocks");
-		ips.forEach((ip) => {
-			ports.forEach((portStr) => {
-				resolvedProxies.forEach((proxy) => {
-					const isTlsPort = TLS_PORTS.has(portStr);
+		/* خانواده ۱: آی‌پی کاربر + TLS (SNI=دامنه، allowInsecure=1) ⇒ بدون خطای SSL/CCL */
+		/* خانواده ۲: دامنه + TLS — گواهی همیشه معتبر */
+		/* خانواده ۳: آی‌پی + پورت HTTP بدون TLS — هیچ گواهی‌ای در کار نیست */
+		const lmlEntries = [];
+		lmlCleanIps.forEach((ipClean) => {
+			ports.forEach((portStr) => { lmlEntries.push({ addr: ipClean, port: portStr, tls: true, ip: ipClean }); });
+		});
+		ports.forEach((portStr) => { lmlEntries.push({ addr: lmlHost, port: portStr, tls: true, ip: "" }); });
+		lmlCleanIps.forEach((ipClean) => {
+			ports.forEach((portStr) => { lmlEntries.push({ addr: ipClean, port: lmlHttpTwin(portStr), tls: false, ip: ipClean }); });
+		});
+		lmlEntries.forEach((entry) => {
+			resolvedProxies.forEach((proxy) => {
+					const ip = entry.addr;
+					const portStr = entry.port;
+					const isTlsPort = entry.tls;
 					const tlsVal = isTlsPort ? "tls" : "none";
 					let userFrag = "";
 					if (user.frag_len && user.frag_int) userFrag += "&fragment=" + encodeURIComponent(user.frag_len + "," + user.frag_int + (isTlsPort ? ",tlshello" : ""));
@@ -4456,26 +3835,26 @@ const SubscriptionService = {
 					if (isTlsPort && user.cipher_suites) userFrag += "&cs=" + encodeURIComponent(user.cipher_suites);
 					if (user.tls_mask) userFrag += "&mask=" + encodeURIComponent(user.tls_mask);
 						
-					const tlsParams = isTlsPort ? ("&insecure=0&fp=" + fp + "&allowInsecure=0&sni=" + host) : "";
+					const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
+					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost) : "";
 
 					if (enableVless) {
-						const remark = "LML | " + proxy.flagEmoji + " | " + user.username;
+						const remark = "LML | " + lmlIpFlag + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " 🔒") + " | " + user.username;
 						links.push("vl" + "e" + "ss://" + user.uuid + "@" + ip + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&encryption=none&host=" + host + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(remark));
 					}
 					if (enableTrojan) {
-						const trojanRemark = "LML | " + proxy.flagEmoji + " | " + user.username;
-						links.push("trojan://" + user.uuid + "@" + ip + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&host=" + host + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(trojanRemark));
+						const trojanRemark = "LML | " + lmlIpFlag + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " 🔒") + " | " + user.username;
+						links.push("trojan://" + user.uuid + "@" + ip + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&host=" + lmlHost + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(trojanRemark));
 					}
 					if (enableSS) {
-						const ssRemark = "LML | " + proxy.flagEmoji + " | " + user.username;
+						const ssRemark = "LML | " + lmlIpFlag + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " 🔒") + " | " + user.username;
 						const methodPass = btoa("aes-256-gcm:" + user.uuid);
-						let pluginOpts = "v2ray-plugin;mode=websocket;host=" + host + ";path=" + decodeURIComponent(proxy.currentDynPath) + (isTlsPort ? ";tls" : "");
+						let pluginOpts = "v2ray-plugin;mode=websocket;host=" + lmlHost + ";path=" + decodeURIComponent(proxy.currentDynPath) + (isTlsPort ? ";tls" : "");
 						let pluginStr = encodeURIComponent(pluginOpts);
 						links.push("ss://" + methodPass + "@" + ip + ":" + portStr + "/?plugin=" + pluginStr + "#" + encodeURIComponent(ssRemark));
 					}
 				});
 			});
-		});
 		const plainContent = links.join("\n");
 		const subContent = btoa(unescape(encodeURIComponent(plainContent)));
 		const downloadBytes = Math.floor((user.used_gb || 0) * 1073741824);
@@ -5299,11 +4678,8 @@ async function handlevIees(env, storedData = null, ctx = null, request = null) {
 						let s = null;
 						let socks5 = getSelectedUserProxy(user?.user_socks5, request);
 						
-                        // PROXY-ROUTE: Cloudflare-hosted destination -> relay through an own-source proxy.
-                        if (!socks5 && useFallback) {
-                            try { s = await lmlConnectLoopBypass(addr, port, dataPayload, request, env); } catch (e) { s = null; }
-                        }
-                        if (!s && socks5) {
+                        // Never download or inject public SOCKS pools automatically.
+                        if (socks5) {
 							try {
 								s = await connectProxy(socks5, addr, port, dataPayload);
 							} catch (proxyErr) {
@@ -5317,9 +4693,84 @@ async function handlevIees(env, storedData = null, ctx = null, request = null) {
 								}
 								throw proxyErr;
 							}
-						} else if (!s) {
-                            s = await connectWithConfiguredFallback(addr,port,dataPayload,targetDoh,
-                                useFallback ? lmlFallbackHostChain(user?.user_proxy_ip || env.LML_PROXYIP_FALLBACK || '', env) : '');
+						} else {
+							// ── Self-loop guard ──────────────────────────────────────────────
+							// Cloudflare Workers cannot open a TCP socket back to themselves or
+							// any *.workers.dev / *.pages.dev host — it's always refused.
+							const _panelHost = (() => { try { return new URL(request.url).hostname; } catch(_){ return null; } })();
+							const _isSelfLoop = !socks5 && _panelHost && (
+								addr === _panelHost ||
+								addr.endsWith('.workers.dev') ||
+								addr.endsWith('.pages.dev')
+							);
+
+							if (_isSelfLoop) {
+								// Refresh VIP bypass pool at most once per hour (same strategy as Zeus).
+								if (!GLOBAL_IPS_CACHE.loop_bypass || Date.now() - (GLOBAL_IPS_CACHE.loop_last_fetch || 0) > 3600000) {
+									GLOBAL_IPS_CACHE.loop_bypass = [];
+									let targetCountries = ["DE", "US", "GB", "NL", "FR"];
+									try {
+										const vipRes = await fetchWithFallback("vip-list");
+										if (vipRes && vipRes.ok) {
+											const files = await vipRes.json();
+											const fetched = files.filter(f => f.name && f.name.endsWith(".txt")).map(f => f.name.replace(".txt","").toUpperCase());
+											if (fetched.length > 0) targetCountries = fetched;
+										}
+									} catch(_) {}
+									targetCountries = targetCountries.sort(() => 0.5 - Math.random()).slice(0, 3);
+									for (const fc of targetCountries) {
+										try {
+											const res = await fetchWithFallback("proxy_vip/" + fc + ".txt");
+											if (res && res.ok) {
+												const lines = (await res.text()).split("\n").map(l => l.trim()).filter(l => l.length > 5);
+												if (lines.length > 0) GLOBAL_IPS_CACHE.loop_bypass = GLOBAL_IPS_CACHE.loop_bypass.concat(lines);
+											}
+										} catch(_) {}
+									}
+									if (GLOBAL_IPS_CACHE.loop_bypass.length > 0) GLOBAL_IPS_CACHE.loop_last_fetch = Date.now();
+								}
+								const bypassPool = (GLOBAL_IPS_CACHE.loop_bypass || []).slice().sort(() => 0.5 - Math.random()).slice(0, 4);
+								if (bypassPool.length > 0) {
+									const ac = new AbortController();
+									try {
+										s = await Promise.any(bypassPool.map(p =>
+											connectProxy(p, addr, port, dataPayload).then(sock => {
+												if (ac.signal.aborted) { try { sock.close(); } catch(_) {} throw new Error("Cancelled"); }
+												ac.abort(); return sock;
+											})
+										));
+									} catch(_) { s = null; }
+								}
+								if (!s) {
+									const IATA = ["FRA","AMS","LHR","CDG","VIE","HEL","CPH","MAD","BCN","MXP","FCO","ZRH","WAW","PRG","DUB","MAN","GVA","BRU","LIS","ATH","SOF","OTP","TLL","RIX","VNO","BUD","BEG","ZAG","MUC","HAM","SIN","NRT","HKG","TPE","ICN","DXB","BOM","DEL","YYZ","YUL","YVR","JFK","EWR","LAX","SFO","ORD","MIA","DFW","SEA","IAD","ATL"];
+									const picks = IATA.slice().sort(() => 0.5 - Math.random()).slice(0, 3);
+									let ok = false;
+									for (const code of picks) {
+										try { s = await connectDirect(code.toLowerCase() + ".proxyip.cmliussss.net", port, dataPayload, targetDoh); ok = true; break; } catch(_) {}
+									}
+									if (!ok) { serverSock.close(1008, 'LML_SELF_LOOP_NO_PROXY'); return; }
+								}
+							} else {
+								// ── Normal path ──────────────────────────────────────────────
+								try {
+									s = await connectWithConfiguredFallback(addr, port, dataPayload, targetDoh,
+										useFallback ? (user?.user_proxy_ip || env.LML_PROXYIP_FALLBACK || '') : '');
+								} catch (directErr) {
+									// IATA fallback when direct fails and no proxyip configured
+									if (useFallback && !user?.user_proxy_ip && !env.LML_PROXYIP_FALLBACK &&
+										[443, 2053, 2083, 2087, 2096, 8443].includes(Number(port))) {
+										const IATA = ["FRA","AMS","LHR","CDG","VIE","HEL","CPH","MAD","BCN","MXP","FCO","ZRH","WAW","PRG","DUB","MAN","GVA","BRU","LIS","ATH","SOF","OTP","TLL","RIX","VNO","BUD","BEG","ZAG","MUC","HAM","SIN","NRT","HKG","TPE","ICN","DXB","BOM","DEL","YYZ","YUL","YVR","JFK","EWR","LAX","SFO","ORD","MIA","DFW","SEA","IAD","ATL"];
+										const picks = IATA.slice().sort(() => 0.5 - Math.random()).slice(0, 3);
+										let ok = false;
+										for (const code of picks) {
+											try { s = await connectDirect(code.toLowerCase() + ".proxyip.cmliussss.net", port, dataPayload, targetDoh); ok = true; break; } catch(_) {}
+										}
+										if (!ok) throw directErr;
+									} else {
+										throw directErr;
+									}
+								}
+							}
                         }
 
 				remoteConnWrapper.socket = s;
@@ -5850,110 +5301,7 @@ const LML_ROUTE_FAILURES = new Map();
 function lmlFallbackHosts(value) {
     return [...new Set(String(value||'').split(/[\s,;]+/).filter(Boolean))]
         .filter(h=>h.length<=253 && /^[a-zA-Z0-9.-]+$/.test(h) && h.includes('.') && !h.startsWith('.') && !h.endsWith('.'))
-        .slice(0,8);
-}
-/* ============================================================
-   PROXY-ROUTE PATCH
-   Goal: the Cloudflare-destination ("CC"/TCP-Loop) failure that killed
-   direct configs is solved the same way Zeus does it, BUT with your own
-   proxy sources - nothing is pulled from any Zeus repo/pool.
-   * sources = neutral public SOCKS5 lists + proxyscrape (same family the
-     panel's own /api/proxy-list already uses), or your own list through
-     the env var LML_PROXY_SOURCES.
-   * the optional proxyIP relay is OFF unless you set LML_PROXYIP_SUFFIX
-     to your own relay host.
-   ============================================================ */
-const LML_EDGE_PROXY_SOURCES = [
-    "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt",
-    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
-    "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
-    "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt",
-    "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt",
-    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5.txt",
-    "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country={country}"
-];
-const LML_LOOP_PROXY_CACHE = { list: [], ts: 0 };
-/* one switch to turn the whole patch off without redeploying another file */
-let LML_PATCH_OFF = false;
-function lmlEdgeProxySources(env, country) {
-    const raw = (env && env.LML_PROXY_SOURCES) ? String(env.LML_PROXY_SOURCES) : "";
-    const list = raw ? raw.split(/[\s,;]+/).filter(Boolean) : LML_EDGE_PROXY_SOURCES;
-    const cc = (country && String(country).toUpperCase() !== "ALL") ? String(country).toLowerCase() : "all";
-    return list.map((u) => u.replace("{country}", cc));
-}
-async function lmlFetchEdgeProxyPool(env, countries) {
-    if (LML_PATCH_OFF) return [];
-    const now = Date.now();
-    if (LML_LOOP_PROXY_CACHE.list.length) {
-        if (now - LML_LOOP_PROXY_CACHE.ts < 3600000) return LML_LOOP_PROXY_CACHE.list;
-    } else if (now - LML_LOOP_PROXY_CACHE.ts < 120000) {
-        return [];   /* negative cache: do not re-scrape on every connection */
-    }
-    const urls = [];
-    for (const cc of countries) urls.push(...lmlEdgeProxySources(env, cc));
-    const uniqUrls = [...new Set(urls)].slice(0, 8);
-    const seen = new Set();
-    const pool = [];
-    await Promise.all(uniqUrls.map(async (u) => {
-        try {
-            const ctl = new AbortController();
-            const to = setTimeout(() => { try { ctl.abort(); } catch (e) { } }, 6000);
-            const res = await fetch(u, { headers: { "User-Agent": "Mozilla/5.0" }, signal: ctl.signal });
-            clearTimeout(to);
-            if (!res || !res.ok) return;
-            const text = await res.text();
-            const parts = String(text).split("\n");
-            for (let k = 0; k < parts.length && pool.length < 400; k++) {
-                let l = parts[k].trim();
-                if (l.length <= 5 || l.length >= 120) continue;
-                if (/^(socks4|socks5|socks|http|https|tg):\/\//i.test(l) || l.indexOf("t.me/socks") >= 0) { }
-                else if (/^\d{1,3}(\.\d{1,3}){3}:\d{2,5}$/.test(l)) l = "socks5://" + l;
-                else continue;
-                if (!seen.has(l)) { seen.add(l); pool.push(l); }
-            }
-        } catch (e) { }
-    }));
-    LML_LOOP_PROXY_CACHE.list = pool;
-    LML_LOOP_PROXY_CACHE.ts = now;
-    return pool;
-}
-const LML_PROXYIP_IATA_DEFAULT = ["fra", "ams", "lhr", "cdg", "vie", "waw", "mad", "bcn", "muc", "hel", "sin", "nrt"];
-function lmlProxyIpFallbackHosts(env) {
-    if (LML_PATCH_OFF) return [];
-    if (env && String(env.LML_DISABLE_PROXYIP_FALLBACK || '') === '1') return [];
-    const suffix = (env && env.LML_PROXYIP_SUFFIX) ? String(env.LML_PROXYIP_SUFFIX).trim() : "";
-    if (!suffix) return [];   /* off by default: no third-party relay */
-    const raw = (env && env.LML_PROXYIP_IATA) ? String(env.LML_PROXYIP_IATA).split(/[\s,;]+/).filter(Boolean) : LML_PROXYIP_IATA_DEFAULT;
-    return raw.slice().sort(() => 0.5 - Math.random()).slice(0, 4)
-        .map((i) => String(i).trim().toLowerCase() + "." + suffix);
-}
-function lmlFallbackHostChain(configured, env) {
-    return [...lmlFallbackHosts(configured), ...lmlProxyIpFallbackHosts(env)].join(" ");
-}
-async function lmlLoopBypassCountries(env) {
-    const raw = (env && env.LML_LOOP_BYPASS_COUNTRIES) ? String(env.LML_LOOP_BYPASS_COUNTRIES)
-        .split(/[\s,;]+/).filter(Boolean) : ["DE", "NL", "FR", "GB", "US", "TR"];
-    const picked = raw.slice().sort(() => 0.5 - Math.random()).slice(0, 2);
-    return picked.concat(["ALL"]);
-}
-async function lmlConnectLoopBypass(addr, port, dataPayload, request, env) {
-    if (LML_PATCH_OFF) return null;
-    if (env && String(env.LML_LOOP_BYPASS || '').toLowerCase() === 'off') return null;
-    let panelHost = null;
-    try { panelHost = request ? new URL(request.url).hostname : null; } catch (e) { panelHost = null; }
-    const isCloudflareSelf = !!panelHost && (addr === panelHost || /\.workers\.dev$/i.test(addr) || /\.pages\.dev$/i.test(addr));
-    if (!isCloudflareSelf) return null;
-    const pool = await lmlFetchEdgeProxyPool(env, await lmlLoopBypassCountries(env));
-    if (!pool.length) return null;
-    const candidates = pool.slice().sort(() => 0.5 - Math.random()).slice(0, 4);
-    const ac = new AbortController();
-    try {
-        return await Promise.any(candidates.map((p) => connectProxy(p, addr, port, dataPayload).then((sock) => {
-            if (ac.signal.aborted) { try { sock.close(); } catch (e) { } throw new Error("Cancelled"); }
-            ac.abort();
-            return sock;
-        })));
-    } catch (e) { return null; }
+        .slice(0,3);
 }
 async function connectWithConfiguredFallback(address,port,payload,doh,fallbacks) {
     try { return await connectDirect(address,port,payload,doh); }
@@ -6781,6 +6129,57 @@ const COMMON_WAVES_SCRIPT = `
 		retintScene();
 	  })();
 	</script>
+
+<style id="lml-mobile-v104">
+/* ================= LML v1.0.4 — بهینه‌سازی کامل گوشی ================= */
+*{ -webkit-tap-highlight-color: transparent; }
+.lml-ip-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+.lml-ip-status{ margin-top:8px; font-size:12.5px; opacity:.85; }
+  padding:8px 10px; border-radius:10px; font-size:12.5px; border:1px solid var(--border, rgba(148,163,255,.18)); }
+
+@media (max-width: 760px) {
+  html{ -webkit-text-size-adjust:100%; text-size-adjust:100%; }
+  body{ overflow-x:hidden; }
+  /* جلوگیری از زوم خودکار iOS روی فیلدها */
+  input, select, textarea, .input{ font-size:16px !important; }
+  /* دکمه‌های انگشتی */
+  .btn, button, .icon-btn{ min-height:42px; }
+  .btn-sm{ min-height:36px; padding:6px 10px; }
+  .btn-block{ width:100%; }
+  /* مودال‌ها تمام‌عرض و از پایین */
+  .modal.open{ align-items:flex-end; padding:0; }
+  .modal-card, .modal.narrow .modal-card{ width:100%; max-width:100%; border-radius:16px 16px 0 0;
+    max-height:92vh; max-height:92dvh; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+  .modal-body{ padding:12px; }
+  .modal-foot{ position:sticky; bottom:0; z-index:5; background:var(--card,#0d1526);
+    border-top:1px solid var(--border, rgba(148,163,255,.15));
+    padding-bottom: calc(10px + env(safe-area-inset-bottom)); gap:8px; }
+  .modal-foot .btn{ flex:1 1 auto; }
+  .drawer-panel{ width:100%; max-width:100%; }
+  /* جدول‌ها: اسکرول افقی به‌جای بیرون‌زدگی */
+  .tbl{ display:block; overflow-x:auto; -webkit-overflow-scrolling:touch; white-space:nowrap; max-width:100%; }
+  #usersTable{ min-width:640px; }
+  .content{ padding-left:10px !important; padding-right:10px !important; padding-bottom:86px !important; }
+  /* کارت‌ها و ردیف‌ها */
+  .kv{ flex-wrap:wrap; }
+  .g-main, .g-2, .g-3, .g-4{ grid-template-columns: minmax(0,1fr); }
+  .switch-row{ align-items:flex-start; }
+  .form-row, .form-row-3{ grid-template-columns: minmax(0,1fr); }
+  .modal-head, .drawer .modal-head{ padding:10px 12px; }
+  .mh-text .modal-title{ font-size:15px; }
+  .mh-text .modal-sub{ font-size:11.5px; }
+  .toast-wrap{ width:calc(100% - 20px); left:10px; right:10px; }
+  /* تب‌های فرم کاربر: قابل لمس و بدون سرریز */
+  .vtabs, .tabs{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .vtabs .tab, .tabs .tab{ white-space:nowrap; }
+  /* نوار بالا */
+  .topbar{ padding-inline:10px; }
+  .topbar .btn{ min-height:38px; font-size:12.5px; }
+}
+@media (max-width: 760px) and (max-height: 520px) {
+  .modal-card{ max-height:96vh; }
+}
+</style>
 `;
 const COMMON_TOAST_JS = `
 		function showToast(message, type = 'success') {
@@ -6807,6 +6206,113 @@ const COMMON_TOAST_JS = `
 				setTimeout(() => toast.remove(), 300);
 			}, 3000);
 		}
+		/* ============================================================
+		   LML COPY v1.0.6 — copy that never fails silently
+		   1) Clipboard API  2) execCommand + iOS trick  3) manual box
+		   ============================================================ */
+		function lmlMiniToast(msg, type) {
+			try {
+				var id = 'lml-mini-toast';
+				var old = document.getElementById(id);
+				if (old && old.parentNode) old.parentNode.removeChild(old);
+				var el = document.createElement('div');
+				el.id = id;
+				el.setAttribute('dir', 'rtl');
+				el.textContent = msg;
+				var bg = (type === 'err' || type === 'warn') ? '#7f1d1d' : '#065f46';
+				el.style.cssText = 'position:fixed;top:calc(12px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:2147483600;background:' + bg + ';color:#fff;padding:10px 16px;border-radius:12px;font-size:13px;font-weight:700;box-shadow:0 8px 30px rgba(0,0,0,.45);max-width:92vw;text-align:center;font-family:inherit;';
+				document.body.appendChild(el);
+				setTimeout(function () { try { el.parentNode.removeChild(el); } catch (e) { } }, 3200);
+			} catch (e) { }
+		}
+		function lmlToastSafe(msg, type) {
+			var t = (type === 'ok' || !type) ? 'ok' : 'err';
+			try { if (typeof window.lmlToastImpl === 'function') { window.lmlToastImpl(msg, t); return; } } catch (e) { }
+			try { if (typeof toast === 'function') { toast(msg, t); return; } } catch (e) { }
+			try { if (typeof showToast === 'function') { showToast(msg, t === 'ok' ? 'success' : 'error'); return; } } catch (e) { }
+			lmlMiniToast(msg, type);
+		}
+		function lmlExecCopy(text, okMsg) {
+			try {
+				var ta = document.createElement('textarea');
+				ta.value = text;
+				ta.setAttribute('readonly', '');
+				ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;outline:none;box-shadow:none;background:transparent;opacity:0;font-size:16px;';
+				document.body.appendChild(ta);
+				try { ta.focus(); ta.select(); if (ta.setSelectionRange) ta.setSelectionRange(0, ta.value.length); } catch (e) { }
+				var ok = false;
+				try { ok = (typeof document.execCommand === 'function') && document.execCommand('copy') === true; } catch (e) { ok = false; }
+				try { document.body.removeChild(ta); } catch (e) { }
+				if (ok) { if (okMsg) lmlToastSafe(okMsg, 'ok'); return true; }
+			} catch (e) { }
+			return false;
+		}
+		function lmlCopyBox(text) {
+			try {
+				var old = document.getElementById('lml-copy-box');
+				if (old && old.parentNode) old.parentNode.removeChild(old);
+				var wrap = document.createElement('div');
+				wrap.id = 'lml-copy-box';
+				wrap.setAttribute('dir', 'rtl');
+				wrap.style.cssText = 'position:fixed;left:0;right:0;top:0;bottom:0;z-index:2147483000;background:rgba(3,7,18,.85);display:flex;align-items:flex-end;justify-content:center;';
+				var card = document.createElement('div');
+				card.style.cssText = 'width:100%;max-width:560px;background:#0d1526;color:#e5e7eb;border-radius:16px 16px 0 0;padding:14px 14px 22px;box-sizing:border-box;';
+				var h = document.createElement('div');
+				h.style.cssText = 'font-weight:800;font-size:14px;margin-bottom:8px;';
+				h.textContent = '\u0645\u062a\u0646 \u0622\u0645\u0627\u062f\u0647 \u0627\u0633\u062a \u2014 \u062f\u06a9\u0645\u0647\u0654 \u06a9\u067e\u06cc \u0631\u0627 \u0628\u0632\u0646\u06cc\u062f';
+				var ta = document.createElement('textarea');
+				ta.value = text;
+				ta.setAttribute('dir', 'ltr');
+				ta.style.cssText = 'width:100%;height:150px;box-sizing:border-box;background:#0a1220;color:#93c5fd;border:1px solid rgba(148,163,255,.25);border-radius:10px;padding:10px;font-size:13px;font-family:ui-monospace,Menlo,monospace;line-height:1.6;';
+				var row = document.createElement('div');
+				row.style.cssText = 'display:flex;gap:8px;margin-top:10px;';
+				var bAll = document.createElement('button');
+				bAll.type = 'button'; bAll.textContent = '\u0627\u0646\u062a\u062e\u0627\u0628 \u0647\u0645\u0647';
+				bAll.style.cssText = 'flex:1;min-height:44px;border-radius:10px;border:0;background:#2563eb;color:#fff;font-weight:700;font-size:13px;';
+				bAll.onclick = function () { try { ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); } catch (e) { } };
+				var bTry = document.createElement('button');
+				bTry.type = 'button'; bTry.textContent = '\u062a\u0644\u0627\u0634 \u062f\u0648\u0628\u0627\u0631\u0647';
+				bTry.style.cssText = 'flex:1;min-height:44px;border-radius:10px;border:1px solid rgba(148,163,255,.35);background:transparent;color:#e5e7eb;font-weight:700;font-size:13px;';
+				bTry.onclick = function () { lmlCopy(text); };
+				var bClose = document.createElement('button');
+				bClose.type = 'button'; bClose.textContent = '\u0628\u0633\u062a\u0646';
+				bClose.style.cssText = 'flex:0 0 auto;padding:0 14px;min-height:44px;border-radius:10px;border:1px solid rgba(148,163,255,.35);background:transparent;color:#e5e7eb;font-weight:700;font-size:13px;';
+				bClose.onclick = function () { try { wrap.parentNode.removeChild(wrap); } catch (e) { } };
+				row.appendChild(bAll); row.appendChild(bTry); row.appendChild(bClose);
+				card.appendChild(h); card.appendChild(ta); card.appendChild(row);
+				wrap.appendChild(card);
+				document.body.appendChild(wrap);
+				try { ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); } catch (e) { }
+			} catch (e) { }
+		}
+		function lmlCopy(text, msg, silent) {
+			try {
+				text = (text === null || text === undefined) ? '' : String(text);
+				if (!text.replace(/\s/g, '')) {
+					if (!silent) lmlToastSafe('\u26a0\ufe0f \u0686\u06cc\u0632\u06cc \u0628\u0631\u0627\u06cc \u06a9\u067e\u06cc \u067e\u06cc\u062f\u0627 \u0646\u0634\u062f\u061b \u0635\u0641\u062d\u0647 \u0631\u0627 \u0631\u0641\u0631\u0634 \u06a9\u0646\u06cc\u062f.', 'warn');
+					return false;
+				}
+				var okMsg = msg || '\u2705 \u06a9\u067e\u06cc \u0634\u062f!';
+				if (navigator.clipboard && navigator.clipboard.writeText) {
+					navigator.clipboard.writeText(text).then(function () {
+						if (!silent) lmlToastSafe(okMsg, 'ok');
+					}).catch(function () {
+						if (!lmlExecCopy(text, okMsg)) lmlCopyBox(text);
+					});
+					return true;
+				}
+				if (lmlExecCopy(text, okMsg)) return true;
+				if (lmlExecCopy(text, okMsg)) return true;
+				if (!silent) lmlCopyBox(text);
+				return false;
+			} catch (e) {
+				if (!silent) { try { lmlCopyBox(text); } catch (e2) { } }
+				return false;
+			}
+		}
+		window.lmlCopy = lmlCopy;
+		window.lmlCopyBox = lmlCopyBox;
+		window.lmlToastSafe = lmlToastSafe;
 		window.alert = function(message) {
 			let msgStr = message ? message.toString() : '';
 			if (msgStr.toLowerCase().includes('d1') && (msgStr.toLowerCase().includes('limit') || msgStr.toLowerCase().includes('exceeded') || msgStr.toLowerCase().includes('daily row'))) {
@@ -7047,52 +6553,96 @@ const HTML_TEMPLATES = {
 	<title>ورود به پــنــل مدیریت</title>
 	${COMMON_HEAD}
 </head>
-<body class="bg-gray-50 text-gray-900 dark:bg-amoled-bg dark:text-zinc-100 min-h-screen flex flex-col items-center justify-center p-4 gap-6">
-
-	<div class="w-full max-w-md bg-white dark:bg-amoled-card border border-gray-200 dark:border-amoled-border rounded-md shadow-xl p-6 relative z-10">
+<body style="margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;gap:18px;background:#08090c;color:#e7e9ef;font-family:Vazirmatn,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Tahoma,sans-serif;">
+	<style>
+		/* ---- LML PANEL DESIGN SYSTEM (login) ---- */
+		.lml-login-bg { position:fixed; inset:0; z-index:0; pointer-events:none;
+			background:
+				radial-gradient(900px 520px at 88% -8%, rgba(79,124,255,.16), transparent 62%),
+				radial-gradient(760px 460px at 4% 104%, rgba(167,139,250,.14), transparent 60%),
+				radial-gradient(700px 500px at 50% 40%, rgba(56,189,248,.05), transparent 60%); }
+		.lml-login-card { position:relative; z-index:10; width:100%; max-width:420px;
+			background:rgba(15,17,22,.72);
+			backdrop-filter:blur(18px) saturate(1.25); -webkit-backdrop-filter:blur(18px) saturate(1.25);
+			border:1px solid rgba(255,255,255,.075); border-radius:24px; padding:30px 26px 24px;
+			box-shadow:0 18px 50px rgba(0,0,0,.55); }
+		.lml-login-logo { width:66px;height:66px;margin:0 auto 16px;border-radius:20px;
+			background:linear-gradient(135deg,#4f7cff,#a78bfa);
+			display:flex;align-items:center;justify-content:center;
+			box-shadow:0 8px 26px rgba(79,124,255,.4);
+			font-size:19px;font-weight:900;color:#fff;letter-spacing:.5px; }
+		.lml-login-title { text-align:center;font-size:20px;font-weight:800;margin:0 0 5px;color:#e7e9ef; }
+		.lml-login-sub { text-align:center;font-size:12.5px;color:#7b839a;margin:0 0 24px;font-weight:500; }
+		.lml-login-label { display:block;font-size:12.5px;font-weight:700;color:#b3bacb;margin-bottom:8px; }
+		.lml-login-input { width:100%;min-height:46px;padding:11px 14px;box-sizing:border-box;
+			background:#14171e;border:1px solid rgba(255,255,255,.075);border-radius:12px;color:#e7e9ef;
+			font-size:14px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:center;outline:none;
+			transition:border-color .18s cubic-bezier(.22,.61,.36,1), box-shadow .18s cubic-bezier(.22,.61,.36,1); }
+		.lml-login-input:focus { border-color:rgba(79,124,255,.6); box-shadow:0 0 0 3px rgba(79,124,255,.15); }
+		.lml-login-input::placeholder { color:#565d70; }
+		.lml-login-btn { width:100%;height:48px;border:0;border-radius:12px;cursor:pointer;margin-top:18px;
+			background:linear-gradient(135deg,#4f7cff,#6d5df6);color:#fff;font-size:15px;font-weight:800;
+			font-family:inherit;box-shadow:0 6px 20px rgba(79,124,255,.35);
+			transition:all .18s cubic-bezier(.22,.61,.36,1); }
+		.lml-login-btn:hover { transform:translateY(-1px); box-shadow:0 10px 28px rgba(79,124,255,.5); filter:brightness(1.06); }
+		.lml-login-btn:active { transform:scale(.98); }
+		.lml-login-btn:disabled { opacity:.55; cursor:not-allowed; transform:none; }
+		.lml-login-link { display:block;width:100%;text-align:center;margin-top:14px;background:none;border:0;cursor:pointer;
+			color:#8fa8ff;font-size:12px;font-weight:700;font-family:inherit;padding:8px;border-radius:8px;transition:all .15s; }
+		.lml-login-link:hover { color:#a5b8ff; background:rgba(79,124,255,.08); }
+		.lml-login-note { font-size:11.5px;line-height:2;color:#b3bacb;background:rgba(251,191,36,.07);
+			border:1px solid rgba(251,191,36,.22);border-radius:14px;padding:13px;margin-bottom:18px; }
+		.lml-token-btn { display:flex;align-items:center;justify-content:center;gap:8px;margin-top:11px;
+			height:42px;border-radius:10px;border:1px solid rgba(52,211,153,.4);background:rgba(52,211,153,.1);
+			color:#34d399;font-weight:800;font-size:12.5px;text-decoration:none;transition:all .18s; }
+		.lml-token-btn:hover { background:rgba(52,211,153,.2); box-shadow:0 4px 14px rgba(52,211,153,.2); }
+		.lml-login-row { display:flex;gap:10px;margin-top:16px; }
+		.lml-login-cancel { flex:0 0 34%;height:46px;border-radius:12px;cursor:pointer;font-family:inherit;
+			border:1px solid rgba(248,113,113,.4);background:rgba(248,113,113,.08);color:#f87171;font-weight:800;font-size:13px;
+			transition:all .18s; }
+		.lml-login-cancel:hover { background:rgba(248,113,113,.18); }
+		.lml-login-submit2 { flex:1;height:46px;border-radius:12px;cursor:pointer;font-family:inherit;border:0;
+			background:linear-gradient(135deg,#4f7cff,#6d5df6);color:#fff;font-weight:800;font-size:13.5px;
+			box-shadow:0 6px 18px rgba(79,124,255,.3);transition:all .18s; }
+		.lml-login-submit2:hover { filter:brightness(1.07); }
+		.lml-login-submit2:disabled { opacity:.55; cursor:not-allowed; }
+		.lml-login-foot { position:relative;z-index:10;font-size:11px;color:#565d70;font-weight:600; }
+		#login-section.hidden, #recovery-section.hidden { display:none !important; }
+	</style>
+	<div class="lml-login-bg"></div>
+	<div class="lml-login-card">
 		<div id="login-section">
-			<h2 class="text-xl font-bold mb-6 text-center text-blue-600 dark:text-blue-400">ورود به پـنـل مدیریت</h2>
-			<form onsubmit="handleLogin(event)" class="space-y-4">
-				<div>
-					<label class="block text-sm font-medium mb-1.5">رمز عبور</label>
-					<input type="password" id="password" class="w-full px-3 py-2 bg-gray-50 dark:bg-amoled-input border border-gray-300 dark:border-amoled-border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-center font-mono" required>
-				</div>
-				<button type="submit" id="submit-btn" class="w-full py-2.5 bg-transparent border-2 border-green-600 text-green-700 hover:bg-green-900/20 hover:text-green-800 dark:border-green-500 dark:text-green-500 dark:hover:bg-green-900/40 dark:hover:text-green-400 font-medium rounded-md text-sm transition font-bold">ورود</button>
+			<div class="lml-login-logo">LML</div>
+			<h2 class="lml-login-title">پنل مدیریت LML</h2>
+			<p class="lml-login-sub">برای ورود به داشبورد، رمز عبور را وارد کنید</p>
+			<form onsubmit="handleLogin(event)">
+				<label class="lml-login-label" for="password">رمز عبور</label>
+				<input type="password" id="password" class="lml-login-input" placeholder="••••••••" autocomplete="current-password" required>
+				<button type="submit" id="submit-btn" class="lml-login-btn">ورود به پنل</button>
 			</form>
-			<div class="mt-4 text-center">
-				<button onclick="toggleRecovery(true)" class="text-xs text-blue-500 hover:text-blue-600 transition font-medium">بازیابی رمز پـنـل</button>
-			</div>
+			<button onclick="toggleRecovery(true)" class="lml-login-link" type="button">بازیابی رمز پـنـل</button>
 		</div>
 		<div id="recovery-section" class="hidden">
-			<h2 class="text-xl font-bold mb-4 text-center text-orange-600 dark:text-orange-400">بازیابی رمز پـنـل</h2>
-			<div class="mb-5 p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800/50 rounded-md text-xs leading-relaxed text-orange-800 dark:text-orange-300">
+			<div class="lml-login-logo" style="background:linear-gradient(135deg,#fbbf24,#f97316);box-shadow:0 8px 26px rgba(251,191,36,.35)">🔑</div>
+			<h2 class="lml-login-title">بازیابی رمز پـنـل</h2>
+			<p class="lml-login-sub">احراز هویت با توکن کلودفلر</p>
+			<div class="lml-login-note">
 				برای احراز هویت و اثبات مالکیت پـنـل، از طریق دکمه زیر وارد کلودفلر شوید و توکن دریافتی را کپی کرده و در کادر زیر وارد کنید.
-				<a href="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_subdomain%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%5D&accountId=*&zoneId=all&name=LML-Deployer-Token" target="_blank" class="mt-3 w-full flex items-center justify-center gap-2 py-2 bg-transparent border-2 border-green-600 text-green-700 hover:bg-green-900/20 hover:text-green-800 dark:border-green-500 dark:text-green-500 dark:hover:bg-green-900/40 dark:hover:text-green-400 rounded-md font-bold transition shadow-md">
-					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-					دریافت توکن
+				<a class="lml-token-btn" href="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_subdomain%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%5D&accountId=*&zoneId=all&name=LML-Deployer-Token" target="_blank">
+					<svg style="width:15px;height:15px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+					دریافت توکن از کلودفلر
 				</a>
 			</div>
-			<form onsubmit="handleRecovery(event)" class="space-y-4">
-				<div>
-					<input type="password" id="api-token" placeholder="توکن را وارد کنید" class="w-full px-3 py-2 bg-gray-50 dark:bg-amoled-input border border-gray-300 dark:border-amoled-border rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500 text-xs text-center font-mono" required>
-				</div>
-				<div class="flex gap-2 pt-2">
-					<button type="button" onclick="toggleRecovery(false)" class="w-1/3 py-2.5 bg-transparent border-2 border-red-700 text-red-700 hover:bg-red-900/20 hover:text-red-800 dark:border-red-700 dark:text-red-500 dark:hover:bg-red-900/40 dark:hover:text-red-400 font-bold rounded-md text-sm transition shadow-sm">انصراف</button>
-					<button type="submit" id="recover-btn" class="w-2/3 py-2.5 bg-transparent border-2 border-green-600 text-green-700 hover:bg-green-900/20 hover:text-green-800 dark:border-green-500 dark:text-green-500 dark:hover:bg-green-900/40 dark:hover:text-green-400 font-medium rounded-md text-sm transition font-bold">بازیابی رمز پـنـل</button>
+			<form onsubmit="handleRecovery(event)">
+				<input type="password" id="api-token" placeholder="توکن را وارد کنید" class="lml-login-input" style="font-size:12px" required>
+				<div class="lml-login-row">
+					<button type="button" onclick="toggleRecovery(false)" class="lml-login-cancel">انصراف</button>
+					<button type="submit" id="recover-btn" class="lml-login-submit2">بازیابی رمز پـنـل</button>
 				</div>
 			</form>
 		</div>
 	</div>
-	<div class="flex flex-col gap-4 relative z-10 w-full max-w-md">
-		<div class="flex flex-wrap items-center gap-3 sm:gap-4 justify-center">
-			
-			
-		</div>
-		<div class="flex flex-wrap items-center gap-3 sm:gap-4 justify-center">
-			
-			
-		</div>
-	</div>
+	<div class="lml-login-foot">LML PANEL — طراحی یکپارچه با داشبورد</div>
 	${COMMON_TOAST_HTML}
 	<script>
 		${COMMON_TOAST_JS}
@@ -7161,6 +6711,9 @@ const HTML_TEMPLATES = {
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+	<script id="lml-copy-engine">
+		/* ============================================================\n		   LML COPY v1.0.6 — copy that never fails silently\n		   1) Clipboard API  2) execCommand + iOS trick  3) manual box\n		   ============================================================ */\n		function lmlMiniToast(msg, type) {\n			try {\n				var id = 'lml-mini-toast';\n				var old = document.getElementById(id);\n				if (old && old.parentNode) old.parentNode.removeChild(old);\n				var el = document.createElement('div');\n				el.id = id;\n				el.setAttribute('dir', 'rtl');\n				el.textContent = msg;\n				var bg = (type === 'err' || type === 'warn') ? '#7f1d1d' : '#065f46';\n				el.style.cssText = 'position:fixed;top:calc(12px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:2147483600;background:' + bg + ';color:#fff;padding:10px 16px;border-radius:12px;font-size:13px;font-weight:700;box-shadow:0 8px 30px rgba(0,0,0,.45);max-width:92vw;text-align:center;font-family:inherit;';\n				document.body.appendChild(el);\n				setTimeout(function () { try { el.parentNode.removeChild(el); } catch (e) { } }, 3200);\n			} catch (e) { }\n		}\n		function lmlToastSafe(msg, type) {\n			var t = (type === 'ok' || !type) ? 'ok' : 'err';\n			try { if (typeof window.lmlToastImpl === 'function') { window.lmlToastImpl(msg, t); return; } } catch (e) { }\n			try { if (typeof toast === 'function') { toast(msg, t); return; } } catch (e) { }\n			try { if (typeof showToast === 'function') { showToast(msg, t === 'ok' ? 'success' : 'error'); return; } } catch (e) { }\n			lmlMiniToast(msg, type);\n		}\n		function lmlExecCopy(text, okMsg) {\n			try {\n				var ta = document.createElement('textarea');\n				ta.value = text;\n				ta.setAttribute('readonly', '');\n				ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;outline:none;box-shadow:none;background:transparent;opacity:0;font-size:16px;';\n				document.body.appendChild(ta);\n				try { ta.focus(); ta.select(); if (ta.setSelectionRange) ta.setSelectionRange(0, ta.value.length); } catch (e) { }\n				var ok = false;\n				try { ok = (typeof document.execCommand === 'function') && document.execCommand('copy') === true; } catch (e) { ok = false; }\n				try { document.body.removeChild(ta); } catch (e) { }\n				if (ok) { if (okMsg) lmlToastSafe(okMsg, 'ok'); return true; }\n			} catch (e) { }\n			return false;\n		}\n		function lmlCopyBox(text) {\n			try {\n				var old = document.getElementById('lml-copy-box');\n				if (old && old.parentNode) old.parentNode.removeChild(old);\n				var wrap = document.createElement('div');\n				wrap.id = 'lml-copy-box';\n				wrap.setAttribute('dir', 'rtl');\n				wrap.style.cssText = 'position:fixed;left:0;right:0;top:0;bottom:0;z-index:2147483000;background:rgba(3,7,18,.85);display:flex;align-items:flex-end;justify-content:center;';\n				var card = document.createElement('div');\n				card.style.cssText = 'width:100%;max-width:560px;background:#0d1526;color:#e5e7eb;border-radius:16px 16px 0 0;padding:14px 14px 22px;box-sizing:border-box;';\n				var h = document.createElement('div');\n				h.style.cssText = 'font-weight:800;font-size:14px;margin-bottom:8px;';\n				h.textContent = '\\u0645\\u062a\\u0646 \\u0622\\u0645\\u0627\\u062f\\u0647 \\u0627\\u0633\\u062a \\u2014 \\u062f\\u06a9\\u0645\\u0647\\u0654 \\u06a9\\u067e\\u06cc \\u0631\\u0627 \\u0628\\u0632\\u0646\\u06cc\\u062f';\n				var ta = document.createElement('textarea');\n				ta.value = text;\n				ta.setAttribute('dir', 'ltr');\n				ta.style.cssText = 'width:100%;height:150px;box-sizing:border-box;background:#0a1220;color:#93c5fd;border:1px solid rgba(148,163,255,.25);border-radius:10px;padding:10px;font-size:13px;font-family:ui-monospace,Menlo,monospace;line-height:1.6;';\n				var row = document.createElement('div');\n				row.style.cssText = 'display:flex;gap:8px;margin-top:10px;';\n				var bAll = document.createElement('button');\n				bAll.type = 'button'; bAll.textContent = '\\u0627\\u0646\\u062a\\u062e\\u0627\\u0628 \\u0647\\u0645\\u0647';\n				bAll.style.cssText = 'flex:1;min-height:44px;border-radius:10px;border:0;background:#2563eb;color:#fff;font-weight:700;font-size:13px;';\n				bAll.onclick = function () { try { ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); } catch (e) { } };\n				var bTry = document.createElement('button');\n				bTry.type = 'button'; bTry.textContent = '\\u062a\\u0644\\u0627\\u0634 \\u062f\\u0648\\u0628\\u0627\\u0631\\u0647';\n				bTry.style.cssText = 'flex:1;min-height:44px;border-radius:10px;border:1px solid rgba(148,163,255,.35);background:transparent;color:#e5e7eb;font-weight:700;font-size:13px;';\n				bTry.onclick = function () { lmlCopy(text); };\n				var bClose = document.createElement('button');\n				bClose.type = 'button'; bClose.textContent = '\\u0628\\u0633\\u062a\\u0646';\n				bClose.style.cssText = 'flex:0 0 auto;padding:0 14px;min-height:44px;border-radius:10px;border:1px solid rgba(148,163,255,.35);background:transparent;color:#e5e7eb;font-weight:700;font-size:13px;';\n				bClose.onclick = function () { try { wrap.parentNode.removeChild(wrap); } catch (e) { } };\n				row.appendChild(bAll); row.appendChild(bTry); row.appendChild(bClose);\n				card.appendChild(h); card.appendChild(ta); card.appendChild(row);\n				wrap.appendChild(card);\n				document.body.appendChild(wrap);\n				try { ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); } catch (e) { }\n			} catch (e) { }\n		}\n		function lmlCopy(text, msg, silent) {\n			try {\n				text = (text === null || text === undefined) ? '' : String(text);\n				if (!text.replace(/\\s/g, '')) {\n					if (!silent) lmlToastSafe('\\u26a0\\ufe0f \\u0686\\u06cc\\u0632\\u06cc \\u0628\\u0631\\u0627\\u06cc \\u06a9\\u067e\\u06cc \\u067e\\u06cc\\u062f\\u0627 \\u0646\\u0634\\u062f\\u061b \\u0635\\u0641\\u062d\\u0647 \\u0631\\u0627 \\u0631\\u0641\\u0631\\u0634 \\u06a9\\u0646\\u06cc\\u062f.', 'warn');\n					return false;\n				}\n				var okMsg = msg || '\\u2705 \\u06a9\\u067e\\u06cc \\u0634\\u062f!';\n				if (navigator.clipboard && navigator.clipboard.writeText) {\n					navigator.clipboard.writeText(text).then(function () {\n						if (!silent) lmlToastSafe(okMsg, 'ok');\n					}).catch(function () {\n						if (!lmlExecCopy(text, okMsg)) lmlCopyBox(text);\n					});\n					return true;\n				}\n				if (lmlExecCopy(text, okMsg)) return true;\n				if (lmlExecCopy(text, okMsg)) return true;\n				if (!silent) lmlCopyBox(text);\n				return false;\n			} catch (e) {\n				if (!silent) { try { lmlCopyBox(text); } catch (e2) { } }\n				return false;\n			}\n		}\n		window.lmlCopy = lmlCopy;\n		window.lmlCopyBox = lmlCopyBox;\n		window.lmlToastSafe = lmlToastSafe;\n
+	</script>
 	<meta name="robots" content="noindex, nofollow">
 	<title>LML PANEL — داشبورد مدیریت</title>
 	<link rel="manifest" href="/manifest.json">
@@ -7745,7 +7298,8 @@ const HTML_TEMPLATES = {
 	.quick-row .lbl { font-size: var(--fs-xs); color: var(--text-4); font-weight: 700; }
 
 	/* ---------- Tables ---------- */
-	.tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+	.tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+	body { overflow-x: hidden; }
 	.tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-sm); min-width: 900px; }
 	.tbl th {
 		position: sticky; top: 0; z-index: 2;
@@ -8105,9 +7659,8 @@ const HTML_TEMPLATES = {
 			left: max(12px, env(safe-area-inset-left));
 		}
 
-		/* --- جدول‌ها: قابل اسکرول به جاي بريده شدن --- */
-		.tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-		.tbl thead, .tbl tbody { display: table; width: 100%; }
+		/* --- جدول‌ها: اسکرول افقي درون tbl-wrap، نه كل صفحه --- */
+		.tbl { min-width: 700px; }
 
 		/* --- اندازه لمس (حداقل استاندارد اندرويد ۴۸dp) --- */
 		.btn { height: 46px; padding: 0 16px; font-size: 15px; }
@@ -9389,22 +8942,9 @@ const HTML_TEMPLATES = {
 									<div class="kv"><span class="k">نسخه نصب‌شده</span><span class="v" id="mVersion">—</span></div>
 									<div class="kv"><span class="k">آخرین نسخه</span><span class="v" id="mLatest">—</span></div>
 									<div class="kv"><span class="k">آپدیت خودکار</span><span class="v" id="mAutoUpdate">—</span></div>
-									<div class="kv"><span class="k">آخرین بررسی</span><span class="v" id="mUpdLast">—</span></div>
-									<div class="kv"><span class="k">بررسی بعدی</span><span class="v" id="mUpdNext">—</span></div>
-									<div class="kv"><span class="k">آخرین رویداد</span><span class="v" id="mUpdMsg">—</span></div>
-								</div>
-								<div class="field" style="margin-top:10px">
-									<label for="updSourceInput">منبع آپدیت (فایل Worker خودت در گیت‌هاب — خالی = مخزن داخلی)</label>
-									<input class="input" id="updSourceInput" placeholder="https://raw.githubusercontent.com/USER/REPO/main/worker.js">
-								</div>
-								<div class="field" style="margin-top:10px">
-									<label for="updWorkerName">نام اسکریپت ورکر در کلودفلر (خالی = از زیردامنه پنل گرفته می‌شود)</label>
-									<input class="input" id="updWorkerName" placeholder="lml-panel">
 								</div>
 								<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-									<button type="button" class="btn btn-primary" id="btnMUpdate"><svg><use href="#i-git"/></svg>بررسی و آپدیت خودکار</button>
-									<button type="button" class="btn" id="btnUpdSaveSource">ذخیره منبع</button>
-									<button type="button" class="btn" id="btnMRollback"><svg><use href="#i-power"/></svg>بازگردانی نسخه قبل</button>
+									<button type="button" class="btn btn-primary" id="btnMUpdate"><svg><use href="#i-git"/></svg>بررسی و بروزرسانی</button>
 								<div id="updateStatusSystem" style="display:none"></div>
 								</div>
 							</div>
@@ -9629,6 +9169,11 @@ const HTML_TEMPLATES = {
 									<button type="button" class="btn btn-sm" id="btnOpenIpRepo3"><svg><use href="#i-globe"/></svg>اسکنر آی‌پی</button>
 								</div>
 								<textarea class="input" id="fIps" placeholder="104.16.0.1" rows="4"></textarea>
+								<div class="lml-ip-actions">
+									<button type="button" class="btn btn-sm" id="btnFilterIps"><svg><use href="#i-filter"/></svg>مرتب‌سازی آی‌پی‌ها</button>
+								</div>
+								<div class="lml-ip-status" id="sslTestStatus" style="display:none"></div>
+								<div class="note" style="margin-top:8px"><svg><use href="#i-info"/></svg><div>همه‌ی آی‌پی‌هایی که وارد کنید <b>بدون بررسی رنج</b> پذیرفته می‌شوند و هرگز خطا نمی‌دهند. کانفیگ مستقیم با آی‌پی شما ساخته می‌شود: <b>آی‌پی + TLS</b> (پورت 443 و… با SNI=دامنه و allowInsecure=1 ⇒ بدون خطای SSL/CCL)، <b>آی‌پی + بدون TLS</b> روی پورت‌های HTTP کلودفلر، و <b>دامنه + TLS</b>.</div></div>
 							</div>
 							<div class="switch-row">
 								<div class="sr-text">
@@ -10013,7 +9558,7 @@ const HTML_TEMPLATES = {
 <h4>۱. دریافت و اجرا</h4><p>روی ویندوز Python 3.9 یا جدیدتر، و روی اندروید Pydroid نصب کنید. فایل را دانلود و اجرا کنید؛ رابط در مرورگر باز می‌شود. اگر خودکار باز نشد، آدرس چاپ‌شده در ترمینال را باز کنید.</p><a class="btn btn-primary" href="/lml-scanner/download" download>دانلود موتور مستقل</a><pre dir="ltr">python LML-Scanner.py</pre>
 <h4>۲. تست دامنهٔ خودتان</h4><p>دامنه همین پنل را در اسکنر وارد کنید. فایل Worker جدید باید قبلاً مستقر شده باشد. پس از اسکن، «خروجی JSON برای پنل» بگیرید.</p>
 <h4>۳. ورود و اعمال نتایج</h4><input class="input" type="file" id="lmlScanFile" accept=".json,application/json"><label>حداکثر آی‌پی قابل اعمال<input class="input" id="ipCount" type="number" min="1" max="100" value="10"></label><p id="lmlImportSummary">فایلی انتخاب نشده است.</p><div id="ipLoading" class="scan-log hidden"></div><p>نتایج مربوط به اینترنتِ زمان تست هستند. هنگام اعمال، چرخش تصادفی خاموش می‌شود. سپس فرم کاربر را ذخیره کنید. برای تست مجدد همان آی‌پی‌ها، آن‌ها را در بخش دلخواه اسکنر وارد کنید.</p>
-</div><div class="modal-foot"><button class="btn" id="btnIpRepoLive">مخزن آی‌پی زنده</button><button class="btn" data-close-modal="modalIps">بستن</button><button class="btn btn-primary" id="btnApplyIps" disabled>اعمال بهترین‌ها در فرم کاربر</button></div></div></div>
+</div><div class="modal-foot"><button class="btn" data-close-modal="modalIps">بستن</button><button class="btn btn-primary" id="btnApplyIps" disabled>اعمال بهترین‌ها در فرم کاربر</button></div></div></div>
 <div class="modal narrow" id="lmlReleaseModal"><div class="modal-card"><div class="modal-head"><h3 class="modal-title">تازه‌های LML</h3><button class="icon-btn" data-close-modal="lmlReleaseModal">×</button></div><div class="modal-body"><h4 id="lmlReleaseVersion"></h4><ul id="lmlReleaseNotes"></ul><p>این اعلان با انتشار Worker جدید روی دامنهٔ خودتان به‌روز می‌شود. هیچ سورسی از سرور شخص ثالث نصب نمی‌شود.</p></div><div class="modal-foot"><button class="btn btn-primary" id="lmlReleaseSeen">متوجه شدم</button><button class="btn" id="lmlReleaseRefresh">بارگذاری نسخهٔ منتشرشده</button></div></div></div>
 
 <!-- ==================== PUBLIC PROXY SCANNER MODAL ==================== -->
@@ -10048,43 +9593,6 @@ const HTML_TEMPLATES = {
 	</div>
 </div>
 
-<!-- ==================== LIVE IP REPOSITORY MODAL ==================== -->
-<div class="modal narrow" id="modalIpRepo">
-	<div class="modal-card">
-		<div class="modal-head">
-			<div class="mh-icon"><svg><use href="#i-globe"/></svg></div>
-			<div class="mh-text"><h3 class="modal-title">مخزن آی‌پی زنده</h3><p class="modal-sub">آی‌پی‌های تمیز را از گیت‌هاب یا همین پنل مدیریت کن — بدون تغییر کد</p></div>
-			<button type="button" class="icon-btn" data-close-modal="modalIpRepo"><svg><use href="#i-x"/></svg></button>
-		</div>
-		<div class="modal-body">
-			<div class="field">
-				<label for="repoCleanUrls">آدرس فایل‌های آی‌پی (هر خط یک URL — raw گیت‌هاب یا jsDelivr)</label>
-				<textarea class="input" id="repoCleanUrls" rows="4" placeholder="https://raw.githubusercontent.com/USER/REPO/main/clean-ips.txt &mdash; لینک معمولی گیت‌هاب (blob)، gist و gitlab هم خودکار تبدیل می‌شوند"></textarea>
-			</div>
-			<div class="field">
-				<label for="repoCleanInline">یا متن مستقیم آی‌پی (هر خط یک آی‌پی، رنج CIDR یا ip:port)</label>
-				<textarea class="input" id="repoCleanInline" rows="4" placeholder="104.16.0.0/13&#10;104.17.1.1:443"></textarea>
-			</div>
-			<div class="field">
-				<label for="repoProxyUrls">منابع پروکسی اضافه (هر خط یک URL؛ برای کد کشور از {CC} یا {cc} استفاده کن)</label>
-				<textarea class="input" id="repoProxyUrls" rows="3" placeholder="https://raw.githubusercontent.com/USER/REPO/main/proxies.txt"></textarea>
-			</div>
-			<div class="field">
-				<label for="repoTtl">مدت کش (ثانیه) — پیشنهاد ۳۰۰</label>
-				<input type="number" class="input" id="repoTtl" value="300" min="20" max="86400">
-			</div>
-			<div class="note" id="repoStatus">آماده</div>
-			<div class="note"><svg><use href="#i-info"/></svg><div>هر تغییری در گیت‌هاب بعد از پایان مدت کش خودکار دیده می‌شود؛ برای اعمال فوری «به‌روزرسانی زنده» را بزن. متغیر محیطی LML_CLEAN_IP_SOURCES روی همه این‌ها اولویت دارد.</div></div>
-		</div>
-		<div class="modal-foot">
-			<button type="button" class="btn" data-close-modal="modalIpRepo">بستن</button>
-			<div class="spacer"></div>
-			<button type="button" class="btn" id="btnRepoSave">ذخیره</button>
-			<button type="button" class="btn btn-primary" id="btnRepoRefresh">به‌روزرسانی زنده</button>
-		</div>
-	</div>
-</div>
-
 <!-- ==================== QUICK CONFIG MODAL ==================== -->
 <div class="modal narrow" id="modalQuick">
 	<div class="modal-card">
@@ -10113,18 +9621,6 @@ const HTML_TEMPLATES = {
 					<label for="quickIsp">اینترنت شما چیست؟</label>
 					<select class="select" id="quickIsp"></select>
 				</div>
-			</div>
-			<div class="field">
-				<label for="quickProxyCountry">کشور پروکسی خروجی (پیش‌فرض: خودکار)</label>
-				<select class="select" id="quickProxyCountry"></select>
-			</div>
-			<div class="field">
-				<label for="quickOutMode">حالت خروجی کانفیگ‌ها</label>
-				<select class="select" id="quickOutMode">
-					<option value="proxy" selected>فقط پروکسی (همه سایتا بدون خطا)</option>
-					<option value="mixed">ترکیبی/مخلوط: پروکسی + مستقیم</option>
-					<option value="direct">فقط مستقیم (بدون پروکسی)</option>
-				</select>
 			</div>
 			<div class="field">
 				<label>تنظیماتی که اعمال می‌شود</label>
@@ -10209,7 +9705,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.0';
+var CURRENT_VERSION = '1.0.7';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -10549,28 +10045,16 @@ function openMenu(anchor, items) {
    4. CLIPBOARD
    ============================================================ */
 function copyText(text, msg) {
-	var done = function () { toast(msg || '✅ کپی شد!', 'ok'); };
-	if (navigator.clipboard && navigator.clipboard.writeText) {
-		navigator.clipboard.writeText(text).then(done).catch(function () { legacyCopy(text, done); });
-		return;
-	}
-	legacyCopy(text, done);
+	/* v1.0.6: multi-step copy - never fails silently */
+	return lmlCopy(text, msg || '\u2705 \u06a9\u067e\u06cc \u0634\u062f!');
 }
 function legacyCopy(text, done) {
-	try {
-		var ta = document.createElement('textarea');
-		ta.value = text;
-		ta.style.position = 'fixed';
-		ta.style.top = '-1000px';
-		ta.setAttribute('readonly', '');
-		document.body.appendChild(ta);
-		ta.select();
-		document.execCommand('copy');
-		document.body.removeChild(ta);
-		done();
-	} catch (e) { toast('❌ خطا در کپی کردن', 'err'); }
+	var ok = lmlExecCopy(text, '');
+	if (ok) { try { done(); } catch (e) { } } else { try { lmlCopyBox(text); } catch (e) { } }
 }
 window.copyText = copyText;
+window.legacyCopy = legacyCopy;
+try { window.lmlToastImpl = toast; } catch (e) { }
 
 document.addEventListener('click', function (e) {
 	var btn = e.target.closest ? e.target.closest('[data-copy-target]') : null;
@@ -10953,7 +10437,6 @@ function api(path, opts) {
 }
 function fetchWithFallbackUI(path, options) {
 	options = options || {};
-	/* unchanged from stock LML: direct fetch, no extra worker hop */
 	var primary = 'https://hoplimit.shop/' + path;
 	var fallback = 'https://raw.githubusercontent.com/' + path;
 	return fetch(primary, options).then(function (res) {
@@ -11379,24 +10862,32 @@ function getUser(username) {
 	for (var i = 0; i < State.allUsers.length; i++) if (State.allUsers[i].username === username) return State.allUsers[i];
 	return null;
 }
-function getSubLink(username) { return window.location.origin + '/feed/' + encodeURIComponent(username); }
-function getSubTextLink(username) { return window.location.origin + '/sub/' + encodeURIComponent(username); }
-function getSingboxLink(username) { return window.location.origin + '/singbox/' + encodeURIComponent(username); }
-function getStatusLink(username) { return window.location.origin + '/status/' + encodeURIComponent(username); }
-function getPortalLink(username) { return window.location.origin + '/s/' + encodeURIComponent(username); }
+/* دامنه و origin پنل: اگر پنل را با آی‌پی باز کرده باشید، آی‌پی هرگز در لینک نمی‌آید */
+function lmlPanelHostName() {
+	return (window.LML_PANEL_HOST && window.LML_PANEL_HOST.length) ? window.LML_PANEL_HOST : window.location.hostname;
+}
+function lmlPanelOrigin() {
+	var proto = (window.location.protocol === 'http:') ? 'http://' : 'https://';
+	return proto + lmlPanelHostName();
+}
+function getSubLink(username) { return lmlPanelOrigin() + '/feed/' + encodeURIComponent(username); }
+function getSubTextLink(username) { return lmlPanelOrigin() + '/sub/' + encodeURIComponent(username); }
+function getSingboxLink(username) { return lmlPanelOrigin() + '/singbox/' + encodeURIComponent(username); }
+function getStatusLink(username) { return lmlPanelOrigin() + '/status/' + encodeURIComponent(username); }
+function getPortalLink(username) { return lmlPanelOrigin() + '/s/' + encodeURIComponent(username); }
 window.getSubLink = getSubLink;
 window.getSingboxLink = getSingboxLink;
 window.getStatusLink = getStatusLink;
 
+var LML_HTTP_TWIN = { '443': '80', '2053': '2052', '2083': '2082', '2087': '2086', '2096': '2095', '8443': '8080' };
 function getvIeesLink(username) {
 	var user = getUser(username);
 	if (!user) return '';
-	var host = window.location.hostname;
+	/* دامنه‌ی پنل: اگر پنل را با آی‌پی باز کرده باشید، همان آی‌پی هرگز در لینک نمی‌آید */
+	var host = (window.LML_PANEL_HOST && window.LML_PANEL_HOST.length) ? window.LML_PANEL_HOST : window.location.hostname;
+	/* IP-FREE: آی‌پی کاربر هم در لینک TLS (با SNI=دامنه) و هم بدون TLS می‌آید */
+	var cleanIps = Array.isArray(user.ips_valid) ? user.ips_valid.slice(0, 40) : [];
 	var ips = [host];
-	if (user.ips) {
-		var parsedIps = String(user.ips).split('\\n').map(function (ip) { return ip.trim(); }).filter(function (ip) { return ip.length > 0; });
-		if (parsedIps.length > 0) ips = parsedIps;
-	}
 	var ports = String(user.port || '443').split(',').map(function (p) { return p.trim(); }).filter(function (p) { return p.length > 0; });
 	/* TLS-ONLY: keep encrypted (TLS) ports only; never leave the list empty */
 	var tlsOnlyPorts = ports.filter(function (p) { return TLS_PORTS.indexOf(p) >= 0; });
@@ -11458,18 +10949,24 @@ function getvIeesLink(username) {
 	var enableTrojan = userConnType.indexOf('trojan') >= 0;
 	var enableSS = userConnType.indexOf('shadowsocks') >= 0;
 
-	ips.forEach(function (ip) {
-		ports.forEach(function (portStr) {
+	var lmlEntries = [];
+	cleanIps.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
+	ips.forEach(function (h) { ports.forEach(function (p) { lmlEntries.push({ addr: h, port: p, tls: true, ip: '' }); }); });
+	cleanIps.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: LML_HTTP_TWIN[p] || '80', tls: false, ip: cip }); }); });
+	lmlEntries.forEach(function (entry) {
 			resolvedProxies.forEach(function (proxy) {
-				var isTlsPort = TLS_PORTS.indexOf(portStr) >= 0;
+				var ip = entry.addr;
+				var portStr = entry.port;
+				var isTlsPort = entry.tls;
 				var tlsVal = isTlsPort ? 'tls' : 'none';
 				var userFrag = '';
 				if (user.frag_len && user.frag_int) userFrag += '&fragment=' + encodeURIComponent(user.frag_len + ',' + user.frag_int + (isTlsPort ? ',tlshello' : ''));
 				if (user.advanced_frag) userFrag += '&fm=' + encodeURIComponent(user.advanced_frag);
 				if (isTlsPort && user.cipher_suites) userFrag += '&cs=' + encodeURIComponent(user.cipher_suites);
 				if (user.tls_mask) userFrag += '&mask=' + encodeURIComponent(user.tls_mask);
-				var tlsParams = isTlsPort ? ('&insecure=0&fp=' + fp + '&allowInsecure=0&sni=' + host) : '';
-				var remark = 'LML | ' + proxy.flagEmoji + ' | ' + user.username;
+				var insecureFlag = (isTlsPort && entry.ip) ? '1' : '0';
+				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host) : '';
+				var remark = 'LML | ' + proxy.flagEmoji + (entry.ip ? (' ' + entry.ip) : ' 🔒') + ' | ' + user.username;
 				if (enableVless) {
 					links.push('vless://' + (user.uuid || '') + '@' + ip + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&encryption=none&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
 				}
@@ -11482,7 +10979,6 @@ function getvIeesLink(username) {
 					links.push('ss://' + methodPass + '@' + ip + ':' + portStr + '/?plugin=' + encodeURIComponent(pluginOpts) + '#' + encodeURIComponent(remark));
 				}
 			});
-		});
 	});
 	return links.join('\\n');
 }
@@ -11491,7 +10987,18 @@ window.getvIeesLink = getvIeesLink;
 /* ============================================================
    9. COPY + QR ACTIONS
    ============================================================ */
-function copyConfig(username) { copyText(getvIeesLink(username), '✅ کانفیگ‌ها با موفقیت کپی شدند!'); }
+function copyConfig(username) {
+	var txt = '';
+	try { txt = getvIeesLink(username) || ''; } catch (e) { txt = ''; }
+	if (!txt.replace(/\s/g, '')) {
+		var sub = '';
+		try { sub = getSubLink(username); } catch (e) { sub = ''; }
+		if (sub) { lmlCopy(sub, '\u26a0\ufe0f \u0644\u06cc\u0646\u06a9 \u0633\u0627\u0628 \u06a9\u067e\u06cc \u0634\u062f!'); return; }
+		lmlToastSafe('\u26a0\ufe0f \u06a9\u0627\u0646\u0641\u06cc\u06af\u06cc \u0633\u0627\u062e\u062a\u0647 \u0646\u0634\u062f\u061b \u0635\u0641\u062d\u0647 \u0631\u0627 \u0631\u0641\u0631\u0634 \u06a9\u0646\u06cc\u062f.', 'warn');
+		return;
+	}
+	lmlCopy(txt, '✅ کانفیگ کپی شد!');
+}
 function copySubLink(enc) { var u = decodeURIComponent(enc); copyText(getSubLink(u), '✅ لینک سابسکریپشن کپی شد!'); }
 function copySingboxLink(enc) { var u = decodeURIComponent(enc); copyText(getSingboxLink(u), '✅ لینک Sing-box کپی شد!'); }
 function copyStatusLink(enc) { var u = decodeURIComponent(enc); copyText(getStatusLink(u), '✅ لینک وضعیت کپی شد!'); }
@@ -11542,7 +11049,7 @@ function getLocPath(username, locIdx) {
 function getLocLink(username, locIdx) {
 	var p = getLocPath(username, locIdx);
 	if (!p) return '';
-	return 'https://' + window.location.hostname + ':443?path=' + encodeURIComponent(p) + '&security=tls&encryption=none&host=' + window.location.hostname + '&type=ws&sni=' + window.location.hostname;
+	return 'https://' + lmlPanelHostName() + ':443?path=' + encodeURIComponent(p) + '&security=tls&encryption=none&host=' + lmlPanelHostName() + '&type=ws&sni=' + lmlPanelHostName();
 }
 
 /* ============================================================
@@ -11708,6 +11215,7 @@ document.addEventListener('click', function (e) {
 	if (!t) return;
 	var act = t.getAttribute('data-act');
 	var u = t.getAttribute('data-u');
+	try {
 	var username = u ? decodeURIComponent(u) : null;
 	switch (act) {
 		case 'user-menu': e.stopPropagation(); userMenu(t, username); break;
@@ -11737,6 +11245,7 @@ document.addEventListener('click', function (e) {
 			break;
 		default: break;
 	}
+	} catch (err) { try { toast('\u062e\u0637\u0627 \u062f\u0631 \u0627\u062c\u0631\u0627\u06cc \u0639\u0645\u0644\u06cc\u0627\u062a: ' + (err && err.message ? err.message : ''), 'err'); } catch (e2) { } }
 });
 
 /* ============================================================
@@ -12377,15 +11886,15 @@ window.openConfigCountWarning = openConfigCountWarning;
 
 /* ---------- created modal ---------- */
 function openCreatedModal(username, uuid) {
-	var subUrl = window.location.origin + '/sub/' + encodeURIComponent(username);
-	var host = window.location.hostname;
+	var subUrl = lmlPanelOrigin() + '/sub/' + encodeURIComponent(username);
+	var host = lmlPanelHostName();
 	var vlessConfig = uuid
 		? 'vless://' + uuid + '@' + host + ':443?path=' + encodeURIComponent('/stream/LML_PANEL/' + (uuid.split('-')[4] || 'default')) + '&security=tls&encryption=none&host=' + host + '&type=ws&sni=' + host + '#' + encodeURIComponent('⚡ LML ❯ ' + username)
 		: subUrl;
 	$('createdSub').textContent = subUrl;
 	$('createdVless').value = vlessConfig;
 	renderQr('createdQr', subUrl, 190);
-	try { if (navigator.clipboard) navigator.clipboard.writeText(subUrl).catch(function () { }); } catch (e) { }
+	try { if (typeof lmlCopy === 'function') lmlCopy(subUrl, '', true); else if (navigator.clipboard) navigator.clipboard.writeText(subUrl).catch(function () { }); } catch (e) { }
 	$('btnCreatedPortal').setAttribute('data-portal', username);
 	$('btnCreatedStatus').setAttribute('data-portal-status', username);
 	openModal('modalCreated');
@@ -12411,22 +11920,9 @@ function populateIpSelect() {
 }
 async function fetchIpsList() {
 	var res = await fetchWithFallbackUI('ips.txt');
-	var lines = [];
-	if (res && res.ok) {
-		var text = await res.text();
-		lines = text.split('\\n').map(function (l) { return l.trim(); }).filter(function (l) { return l.length > 0 && l.indexOf('#') < 0 && l.indexOf('[source') !== 0; });
-	}
-	/* WORLDWIDE: merge the curated clean-IP pool of this worker */
-	try {
-		var r2 = await api('/api/clean-ips', { method: 'POST', body: { count: 200 } });
-		var d2 = await r2.json().catch(function () { return {}; });
-		if (d2 && d2.ips && d2.ips.length) {
-			var have = {};
-			lines.forEach(function (x) { have[x] = 1; });
-			d2.ips.forEach(function (x) { if (!have[x]) { have[x] = 1; lines.push(x); } });
-		}
-	} catch (e) { }
-	if (!lines.length) throw new Error('Fetch failed');
+	if (!res.ok) throw new Error('Fetch failed');
+	var text = await res.text();
+	var lines = text.split('\\n').map(function (l) { return l.trim(); }).filter(function (l) { return l.length > 0 && l.indexOf('#') < 0 && l.indexOf('[source') !== 0; });
 	State.cachedIps = { all: lines };
 	State.ipsFetchedAt = Date.now();
 	populateIpSelect();
@@ -12536,105 +12032,27 @@ on($('btnOpenIpRepo'), 'click', openIpRepoModal);
 on($('btnOpenIpRepo2'), 'click', openIpRepoModal);
 on($('btnOpenIpRepo3'), 'click', openIpRepoModal);
 
-/* ===================== LIVE IP REPOSITORY (GitHub / panel DB) ===================== */
-function repoSetStatus(txt, kind) {
-	var el = $('repoStatus');
-	if (!el) return;
-	el.textContent = txt;
-	el.setAttribute('data-kind', kind || 'info');
-}
-function openIpRepoAdmin() {
-	openModal('modalIpRepo');
-	loadIpRepoAdmin();
-}
-window.openIpRepoAdmin = openIpRepoAdmin;
-async function loadIpRepoAdmin() {
-	repoSetStatus('در حال خواندن تنظیمات مخزن...');
-	try {
-		var r = await api('/api/ip-repo');
-		var d = await r.json().catch(function () { return {}; });
-		if (!d || !d.success) throw new Error((d && d.error) || 'تنظیمات خوانده نشد');
-		if ($('repoCleanUrls')) $('repoCleanUrls').value = (d.config && d.config.urls) || '';
-		if ($('repoCleanInline')) $('repoCleanInline').value = (d.config && d.config.inline) || '';
-		if ($('repoProxyUrls')) $('repoProxyUrls').value = (d.config && d.config.proxyUrls) || '';
-		if ($('repoTtl')) $('repoTtl').value = String((d.config && d.config.ttl) || 300);
-		repoRenderCache(d.cache, d.config);
-	} catch (e) {
-		repoSetStatus('خطا: ' + e.message, 'err');
-	}
-}
-function repoRenderCache(cache, config) {
-	var bits = [];
-	var src = (config && config.srcUrls) === 'env' ? 'متغیر محیطی' : ((config && config.srcUrls) === 'db' ? 'پنل یا گیت‌هاب' : 'پیش‌فرض داخلی');
-	bits.push('منبع فعال: ' + src);
-	if (config && config.inlineLines) bits.push('متن دستی: ' + config.inlineLines + ' خط');
-	if (cache && cache.count) bits.push('استخر فعلی: ' + cache.count + ' آی‌پی');
-	if (cache && cache.age >= 0) bits.push('عمر کش: ' + Math.round(cache.age / 1000) + ' ثانیه');
-	repoSetStatus(bits.join(' • '));
-}
-async function saveIpRepoAdmin(refresh) {
-	var btn = $('btnRepoRefresh');
-	if (btn) { btn.disabled = true; btn.textContent = refresh ? 'در حال به‌روزرسانی...' : 'در حال ثبت...'; }
-	try {
-		var r = await api('/api/ip-repo', {
-			method: 'POST',
-			body: {
-				urls: ($('repoCleanUrls') && $('repoCleanUrls').value) || '',
-				inline: ($('repoCleanInline') && $('repoCleanInline').value) || '',
-				proxyUrls: ($('repoProxyUrls') && $('repoProxyUrls').value) || '',
-				ttl: parseInt(($('repoTtl') && $('repoTtl').value) || '300', 10) || 300,
-				refresh: !!refresh
-			}
-		});
-		var d = await r.json().catch(function () { return {}; });
-		if (!d || !d.success) throw new Error((d && d.error) || 'ذخیره نشد');
-		if (d.live) {
-			repoSetStatus('ذخیره شد — ' + d.live.total + ' آی‌پی از منابع فعلی خوانده شد');
-			toast('مخزن آی‌پی ذخیره و به‌روزرسانی شد (' + d.live.total + ' آی‌پی)', 'success');
-		} else {
-			toast('مخزن آی‌پی ذخیره شد', 'success');
-			loadIpRepoAdmin();
-		}
-		State.ipsFetchedAt = 0;
-	} catch (e) {
-		repoSetStatus('خطا: ' + e.message, 'err');
-		toast('خطا در ذخیره مخزن آی‌پی', 'err');
-	} finally {
-		if (btn) { btn.disabled = false; btn.textContent = 'به‌روزرسانی زنده'; }
-	}
-}
-async function refreshIpRepoAdmin() {
-	repoSetStatus('در حال خواندن زنده منابع...');
-	try {
-		var r = await api('/api/ip-repo/refresh', { method: 'POST', body: {} });
-		var d = await r.json().catch(function () { return {}; });
-		if (!d || !d.success) throw new Error((d && d.error) || 'به‌روزرسانی نشد');
-		var parts = [];
-		var detail = d.detail || {};
-		for (var k in detail) parts.push(k + ': ' + detail[k]);
-		if (d.failed && d.failed.length) parts.push('خوانده نشد → ' + d.failed.join(', '));
-		repoSetStatus('زنده خوانده شد — ' + d.total + ' آی‌پی (' + parts.join(' • ') + ')');
-		toast('مخزن زنده بازخوانی شد: ' + d.total + ' آی‌پی', 'success');
-		State.ipsFetchedAt = 0;
-	} catch (e) {
-		repoSetStatus('خطا: ' + e.message, 'err');
-	}
-}
-window.loadIpRepoAdmin = loadIpRepoAdmin;
-window.saveIpRepoAdmin = saveIpRepoAdmin;
-window.refreshIpRepoAdmin = refreshIpRepoAdmin;
-on($('btnIpRepoLive'), 'click', openIpRepoAdmin);
-on($('btnRepoSave'), 'click', function () { saveIpRepoAdmin(false); });
-on($('btnRepoRefresh'), 'click', function () { saveIpRepoAdmin(true); });
-
 /* VIP proxy cache (used to highlight known-good proxy links) */
-function initVipCache() {
-	/* PROXY-ROUTE PATCH: intentionally does nothing on boot.
-	   The old version pulled a country proxy list; the first patched version
-	   called /api/proxy-list three times, which is CPU heavy on a Worker and
-	   could starve the panel's own API calls while the dashboard loads.
-	   The "known-good" highlight now comes from the panel's proxy flag cache. */
-	State.cachedVipList = [];
+async function initVipCache() {
+	try {
+		var res = await fetchWithFallbackUI('vip-list');
+		if (!res.ok) return;
+		var files = await res.json();
+		State.cachedVipList = (files || []).filter(function (f) { return f && f.name && f.name.indexOf('.txt') === f.name.length - 4; })
+			.map(function (f) { return f.name.replace('.txt', '').toUpperCase(); });
+		if (State.cachedVipList && State.cachedVipList.length) {
+			await Promise.all(State.cachedVipList.map(async function (country) {
+				try {
+					var r2 = await fetchWithFallbackUI('proxy_vip/' + country + '.txt');
+					if (r2.ok) {
+						var txt = await r2.text();
+						var lines = txt.split('\\n').map(function (l) { return l.trim(); }).filter(function (l) { return l.length > 5; });
+						if (lines.length) State.cachedVipProxies[country] = lines;
+					}
+				} catch (e) { }
+			}));
+		}
+	} catch (e) { }
 }
 
 /* ============================================================
@@ -13039,7 +12457,7 @@ async function createInstantTrial(btn) {
 		var res = await api('/api/trial', { method: 'POST' });
 		var d = await res.json().catch(function () { return {}; });
 		if (res.ok && d.success) {
-			try { if (navigator.clipboard) navigator.clipboard.writeText(d.subUrl).catch(function () { }); } catch (e) { }
+			try { if (typeof lmlCopy === 'function') lmlCopy(d.subUrl, '', true); else if (navigator.clipboard) navigator.clipboard.writeText(d.subUrl).catch(function () { }); } catch (e) { }
 			toast('✅ اکانت ' + d.username + ' با موفقیت ایجاد و لینک کپی شد!', 'ok');
 			loadUsers();
 		} else toast((d && d.error) || 'خطا در ایجاد تست', 'err');
@@ -13054,7 +12472,7 @@ function createWarpConfig() { toast('کانفیگ WARP از این نسخه حذ
 	var warpLink = 'vless://warp-core@engage.cloudflareclient.com:2408?encryption=none&security=none&type=ws&host=' + host + '&path=%2Fstream%2FLML_PANEL%2Fdefault#⚡%20LML%20❯%20[WARP-ON-WARP]';
 	vset('warpConfig', warpLink);
 	renderQr('warpQr', warpLink, 180);
-	try { if (navigator.clipboard) navigator.clipboard.writeText(warpLink).catch(function () { }); } catch (e) { }
+	try { if (typeof lmlCopy === 'function') lmlCopy(warpLink, '', true); else if (navigator.clipboard) navigator.clipboard.writeText(warpLink).catch(function () { }); } catch (e) { }
 	openModal('modalWarp');
 	toast('🚀 کانفیگ اختصاصی WARP ایجاد و کپی شد!', 'ok');
 }
@@ -13485,7 +12903,6 @@ function renderSystemViews() {
 	$('mVersion').textContent = CURRENT_VERSION;
 	$('mLatest').textContent = State.latestVersion || CURRENT_VERSION;
 	$('mAutoUpdate').textContent = State.autoUpdate ? 'فعال' : 'غیرفعال';
-	try { loadSelfUpdateStatus(); } catch (e) { }
 	$('setVersion').textContent = CURRENT_VERSION;
 	$('setLatest').textContent = State.latestVersion || '—';
 	$('setServerTime').textContent = dateStr(State.serverTime);
@@ -14213,7 +13630,8 @@ on($('btnSubmitToken'), 'click', function () {
 		State.pendingCoreAction = null;
 		return;
 	}
-	handleCoreAction(State.pendingCoreAction || 'update', token);
+	if((State.pendingCoreAction || 'update') === 'update'){ applyPanelUpdate(token); return; }
+	handleCoreAction(State.pendingCoreAction, token);
 });
 window.checkAutoUpdateSetup = async function () {
 	try {
@@ -14342,14 +13760,7 @@ async function fetchUpdateSource() {
 			if (text) { UPDATE_BRANCH = branches[i]; return text; }
 		}
 
-		/* 5. last resort */
-		try {
-			var r0 = await updateFetch('https://hoplimit.shop/worker.js' + stamp, { cache: 'no-store' }, UPDATE_TIMEOUT_MS);
-			if (r0 && r0.ok) {
-				var t0 = await r0.text();
-				if (t0 && t0.length > 20000) return t0;
-			}
-		} catch (e) { }
+		/* 5. منبع آپدیت فقط گیت‌هاب است — fallback دیگری وجود ندارد */
 		return null;
 	} finally {
 		UPDATE_BUSY = false;
@@ -14358,19 +13769,103 @@ async function fetchUpdateSource() {
 
 window.fetchUpdateSource = fetchUpdateSource;
 
+/* ============================================================
+   LML v1.0.4 — آپدیت خودکار از گیت‌هاب (با پرسش از مدیر)
+   ============================================================ */
+var LML_UPDATE_PROMPT_AT = 0;
+var LML_UPDATE_PROMPT_VER = '';
+var LML_UPDATE_BUSY = false;
+
 async function checkForUpdates(isManual) {
-    try {
-        var response=await fetch('/lml-scanner/release',{cache:'no-store'});
-        if(!response.ok) throw Error('release');
-        var info=await response.json();State.latestVersion=info.version;
-        set('setLatest',info.version);set('mLatest',info.version);
-        ['updateStatusSettings','updateStatusSystem'].forEach(function(id){var el=$(id);if(el){el.textContent='نسخه منتشرشده: '+info.version+' — آپدیت خودکار همین نسخه را خودش نصب می‌کند.';el.style.display='';}});
-        if(isManual && window.lmlShowRelease) await window.lmlShowRelease();
-    } catch(e) { if(isManual) toast('دریافت اطلاعات نسخه از همین پنل ناموفق بود.','err'); }
+	try {
+		var res = await api('/api/update-check');
+		var info = await res.json().catch(function () { return {}; });
+		if (!res.ok || !info || info.error) throw new Error((info && info.error) || 'check');
+		State.latestVersion = info.latest || CURRENT_VERSION;
+		set('setLatest', info.latest || '—');
+		set('mLatest', info.latest || '—');
+		renderUpdateState({ latest: info.latest, isNewer: !!info.has_update, error: false });
+		if (info.has_update) {
+			if (isManual) openUpdateModal(info.latest);
+			else await promptUpdate(info.latest);
+		} else if (isManual) {
+			toast('✅ پنل به‌روز است (نسخه ' + (info.current || CURRENT_VERSION) + ')', 'ok');
+		}
+	} catch (e) {
+		renderUpdateState({ error: true });
+		if (isManual) toast('بررسی آپدیت ناموفق بود؛ اتصال به گیت‌هاب برقرار نشد.', 'warn');
+	}
 }
 window.checkForUpdates = checkForUpdates;
 
-/* Draws the outcome of an update check into every place it can be seen, so
+/* پرسش از مدیر: «می‌خوای اپدیت کنم؟» */
+async function promptUpdate(latest) {
+	var now = Date.now();
+	if (LML_UPDATE_PROMPT_VER === latest && (now - LML_UPDATE_PROMPT_AT) < 6 * 3600 * 1000) return false;
+	LML_UPDATE_PROMPT_AT = now;
+	LML_UPDATE_PROMPT_VER = latest;
+	var ok = await confirmBox('نسخه جدید ' + latest + ' روی گیت‌هاب منتشر شده. می‌خوای اپدیت کنم؟',
+		{ title: 'اپدیت خودکار از گیت‌هاب', okText: 'بله، اپدیت کن', cancelText: 'بعداً' });
+	if (!ok) return false;
+	return await applyPanelUpdate();
+}
+window.promptUpdate = promptUpdate;
+
+/* اعمال واقعی آپدیت: سورس از گیت‌هاب گرفته و روی همین ورکر نوشته می‌شود */
+async function applyPanelUpdate(token) {
+	if (LML_UPDATE_BUSY) { toast('یک آپدیت در حال انجام است؛ چند لحظه صبر کنید.', 'warn'); return false; }
+	LML_UPDATE_BUSY = true;
+	try {
+		closeModal('modalUpdate');
+		toast('در حال دریافت و اعمال آپدیت از گیت‌هاب... لطفاً چند ثانیه صبر کنید.', 'info', 12000);
+		var res = await api('/api/update-panel', { method: 'POST', body: token ? { cf_token: token } : {} });
+		var data = await res.json().catch(function () { return {}; });
+		if (res.status === 400 && (data.error === 'TOKEN_REQUIRED' || data.error === 'INVALID_TOKEN')) {
+			State.pendingCoreAction = 'update';
+			openModal('modalToken');
+			return false;
+		}
+		if (res.ok && data.success) {
+			toast('✅ آپدیت با موفقیت اعمال شد. صفحه رفرش می‌شود...', 'ok', 9000);
+			setTimeout(function () {
+				try { sessionStorage.setItem('lml_last_update', Date.now()); } catch (e) { }
+				window.location.reload();
+			}, 6000);
+			return true;
+		}
+		toast('❌ آپدیت اعمال نشد: ' + ((data && data.error) || ('خطای ' + res.status)), 'err', 10000);
+		return false;
+	} catch (e) {
+		toast('❌ خطا در ارتباط با سرور: ' + e.message, 'err', 9000);
+		return false;
+	} finally {
+		LML_UPDATE_BUSY = false;
+	}
+}
+window.applyPanelUpdate = applyPanelUpdate;
+
+/* ============================================================
+   LML IP-FREE — مرتب‌سازی آی‌پی‌ها: بدون بررسی رنج، بدون خطا
+   ============================================================ */
+async function lmlFilterIpsNow() {
+	var st = $('sslTestStatus');
+	var raw = ($('fIps') && $('fIps').value) || '';
+	var ips = raw.replace(/[^0-9.]/g, ' ').split(' ').filter(function (x) {
+		return /^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}$/.test(x) && x.split('.').every(function (n) { return Number(n) <= 255; });
+	});
+	var seenIp = {};
+	var uniq = [];
+	ips.forEach(function (x) { if (!seenIp[x]) { seenIp[x] = 1; uniq.push(x); } });
+	if (!uniq.length) { toast('آی‌پی‌ای وارد نشده است.', 'warn'); return; }
+	$('fIps').value = uniq.join(String.fromCharCode(10));
+	if (st) {
+		st.style.display = '';
+		st.textContent = uniq.length + ' آی‌پی آماده — همه پذیرفته شدند (بدون بررسی رنج)؛ کانفیگ TLS مستقیم با آی‌پی شما ساخته می‌شود';
+	}
+	toast('✅ ' + uniq.length + ' آی‌پی پذیرفته و مرتب شد.', 'ok');
+}
+window.lmlFilterIpsNow = lmlFilterIpsNow;
+on($('btnFilterIps'), 'click', function () { lmlFilterIpsNow(); });/* Draws the outcome of an update check into every place it can be seen, so
    the answer shows up wherever the button was pressed instead of only as a
    toast that disappears. */
 function renderUpdateState(info) {
@@ -14403,133 +13898,55 @@ function renderUpdateState(info) {
 	});
 }
 window.renderUpdateState = renderUpdateState;
-
-/* ============================================================
-   AUTOMATIC SELF-UPDATE (client side)
-   The manual "deploy new worker by hand" flow is gone: the worker checks
-   its source itself, validates the code, deploys it and reports back.
-   ============================================================ */
-async function loadSelfUpdateStatus() {
-	try {
-		var r = await api('/api/self-update');
-		var d = await r.json().catch(function () { return {}; });
-		if (!d || !d.success) return null;
-		State.selfUpdate = d;
-		State.autoUpdate = !!d.auto;
-		set('mVersion', d.current_version || CURRENT_VERSION);
-		set('mAutoUpdate', d.auto ? 'فعال' : 'خاموش');
-		set('mLatest', d.applied_version ? d.applied_version : (d.current_version || CURRENT_VERSION));
-		set('mUpdLast', d.last_check ? dateStr(d.last_check) : 'هنوز بررسی نشده');
-		set('mUpdNext', d.next_in > 0 ? (Math.ceil(d.next_in / 60) + ' دقیقه دیگر') : 'در صف کرون');
-		set('mUpdMsg', d.last_msg || '—');
-		var srcEl = $('updSourceInput');
-		if (srcEl && document.activeElement !== srcEl) srcEl.value = d.source || '';
-		var snEl = $('updWorkerName');
-		if (snEl && document.activeElement !== snEl) snEl.value = d.script_name || '';
-		var rb = $('btnMRollback');
-		if (rb) { rb.disabled = !d.rollback_ready; rb.title = d.rollback_ready ? 'نسخه قبلی برای برگشت آماده است' : 'هنوز نسخه‌ای برای برگشت ذخیره نشده'; }
-		var st = $('setAutoUpdate');
-		if (st) st.checked = !!d.auto;
-		var box = $('updateStatusSystem');
-		if (box) {
-			if (!d.source && !d.env_source) {
-				box.innerHTML = '<div class="note warn" style="margin-top:10px"><svg><use href="#i-alert"/></svg><div>' +
-					'برای آپدیت خودکار، آدرس فایل Worker خودت را در گیت‌هاب بالای همین کارت بگذار (مثلاً raw.githubusercontent.com/USER/REPO/main/worker.js) و «ذخیره منبع» را بزن.' +
-					'<br>یا متغیر محیطی <b class="mono">LML_UPDATE_SOURCE</b> را روی همان آدرس ست کن.</div></div>';
-				box.style.display = '';
-			} else if (d.fails > 0) {
-				box.innerHTML = '<div class="note warn" style="margin-top:10px"><svg><use href="#i-alert"/></svg><div>' +
-					'آخرین بررسی‌ها ناموفق بود (' + d.fails + ' بار) — آدرس منبع را چک کن.</div></div>';
-				box.style.display = '';
-			} else if (box.style.display !== 'none' && !d.last_msg) {
-				box.innerHTML = '';
-				box.style.display = 'none';
-			}
-		}
-		return d;
-	} catch (e) { return null; }
-}
-window.loadSelfUpdateStatus = loadSelfUpdateStatus;
-async function runAutoUpdateCheck() {
-	toast('⏳ در حال بررسی و آپدیت خودکار...', 'info');
-	try {
-		var r = await api('/api/self-update/check', { method: 'POST', body: { apply: true } });
-		var d = await r.json().catch(function () { return {}; });
-		if (!d || d.error) { toast('خطا: ' + ((d && d.error) || 'بررسی ناموفق بود'), 'err'); return; }
-		var msg;
-		if (d.applied) msg = '✅ نسخه ' + (d.version || 'جدید') + ' خودکار نصب شد';
-		else if (d.up_to_date) msg = '✅ روی آخرین نسخه هستی (' + (d.version || CURRENT_VERSION) + ')';
-		else if (d.rejected) msg = '⛔️ نسخه جدید رد شد: ' + (d.reason || '');
-		else if (d.pending) msg = '🚀 نسخه ' + (d.version || 'جدید') + ' آماده است — ' + (d.reason === 'auto-off' ? 'آپدیت خودکار خاموش است' : (d.reason === 'NO_TOKEN' ? 'توکن کلودفلر ثبت نشده' : 'در انتظار'));
-		else msg = 'ℹ️ ' + (d.reason || 'بررسی انجام شد');
-		toast(msg, d.applied || d.up_to_date ? 'ok' : 'warn', 9000);
-		await loadSelfUpdateStatus();
-	} catch (e) { toast('خطا در بررسی آپدیت', 'err'); }
-}
-window.runAutoUpdateCheck = runAutoUpdateCheck;
-async function saveUpdSource() {
-	var val = ($('updSourceInput') && $('updSourceInput').value.trim()) || '';
-	try {
-		var sn = ($('updWorkerName') && $('updWorkerName').value.trim()) || '';
-		var r = await api('/api/self-update', { method: 'POST', body: { source: val, worker_name: sn } });
-		var d = await r.json().catch(function () { return {}; });
-		if (!d || !d.success) throw new Error((d && d.error) || 'ذخیره نشد');
-		toast('✅ منبع آپدیت ذخیره شد', 'ok');
-		await loadSelfUpdateStatus();
-	} catch (e) { toast('خطا: ' + e.message, 'err'); }
-}
-window.saveUpdSource = saveUpdSource;
-async function doUpdRollback() {
-	var ok = await confirmBox('به نسخه قبلی پنل برگردیم؟ پنل چند ثانیه ری‌استارت می‌شود.', { title: 'بازگردانی نسخه' });
-	if (!ok) return;
-	try {
-		var r = await api('/api/self-update/rollback', { method: 'POST', body: {} });
-		var d = await r.json().catch(function () { return {}; });
-		if (!d || !d.success) throw new Error((d && d.error) || 'برگشت ناموفق بود');
-		toast('↩️ به نسخه قبلی برگشتیم — چند ثانیه صبر کن', 'ok', 9000);
-	} catch (e) { toast('خطا: ' + e.message, 'err'); }
-}
-window.doUpdRollback = doUpdRollback;
 function openUpdateModal(version) {
 	$('updateModalText').innerHTML = '<div style="line-height:1.9">' +
-		'<p>نسخه جدید <b class="mono">' + esc(version || '') + '</b> در دسترس است. نسخه فعلی شما <b class="mono">' + CURRENT_VERSION + '</b> می‌باشد.</p>' +
-		'<div class="note ok" style="margin-top:12px"><svg><use href="#i-check"/></svg><div>' +
-		'این نسخه با یک کلیک روی «آپدیت خودکار» بررسی، اعتبارسنجی و نصب می‌شود؛ فقط توکن کلودفلر با دسترسی ویرایش Worker را یک‌بار ثبت کن.' +
-		'<br>اگر آپدیت خودکار خاموش باشد، نسخه جدید فقط اعلام می‌شود و چیزی نصب نمی‌شود.</div></div>' +
+		'<p><b>می‌خوای اپدیت کنم؟</b></p>' +
+		'<p>نسخه جدید <b class="mono">' + esc(version || '') + '</b> از گیت‌هاب آماده است. نسخه فعلی شما <b class="mono">' + esc(CURRENT_VERSION) + '</b> است.</p>' +
+		'<div class="note"><svg><use href="#i-info"/></svg><div>سورس جدید مستقیماً روی همین ورکر نوشته می‌شود و تنظیمات دیتابیس شما دست‌نخورده می‌ماند. اگر این پنل روی دامنه کلودفلر است، برای اعمال خودکار توکن کلودفلر (دسترسی ویرایش Worker) لازم است.</div></div>' +
 		'</div>';
-openModal('modalUpdate');
+	openModal('modalUpdate');
 }
-on($('btnApplyUpdate'), 'click', function () { closeModal('modalUpdate'); runAutoUpdateCheck(); });
-on($('btnCheckUpdate'), 'click', function () { runAutoUpdateCheck(); });
-on($('btnMUpdate'), 'click', function () { runAutoUpdateCheck(); });
-on($('btnUpdSaveSource'), 'click', function () { saveUpdSource(); });
-on($('btnMRollback'), 'click', function () { doUpdRollback(); });
+on($('btnApplyUpdate'), 'click', function () { applyPanelUpdate(); });
+on($('btnCheckUpdate'), 'click', function () { checkForUpdates(true); });
+on($('btnMUpdate'), 'click', function () { checkForUpdates(true); });
 on($('btnRestartCore'), 'click', function () { handleCoreAction('restart', null); });
 on($('btnMRestart'), 'click', function () { handleCoreAction('restart', null); });
 
 async function handleCoreAction(actionType, token) {
-	if (actionType === 'update') {
-		/* the ONLY update path: automatic. A token handed in from the token
-		   modal is stored first, then the engine runs. */
-		if (token) {
-			try { await api('/api/auto-update-setup', { method: 'POST', body: { action: 'enable', token: token } }); } catch (e) { }
-		}
-		return runAutoUpdateCheck();
-	}
+    if(actionType==='update'){ if(token){ return await applyPanelUpdate(token); } closeModal('modalUpdate'); await checkForUpdates(true); return; }
 	State.pendingCoreAction = actionType;
-	var ok = await confirmBox('آیا از ری‌استارت پنل مطمئن هستید؟ کاربران شما لحظه‌ای قطع خواهند شد.', { title: 'ری‌استارت پنل', okText: 'ری‌استارت', danger: true });
-	if (!ok) return;
+	var isUpdate = actionType === 'update';
+	if (!isUpdate) {
+		var ok = await confirmBox('آیا از ری‌استارت پنل مطمئن هستید؟ کاربران شما لحظه‌ای قطع خواهند شد.', { title: 'ری‌استارت پنل', okText: 'ری‌استارت', danger: true });
+		if (!ok) return;
+	}
+	if (isUpdate && !token) {
+		closeModal('modalUpdate');
+		toast('در حال دریافت و اعمال آپدیت نسخه ' + (State.latestVersion || 'جدید') + '... لطفاً چند ثانیه صبر کنید.', 'info', 10000);
+	}
 	try {
-		var res = await api('/api/restart-core', { method: 'POST', body: {} });
+		var res = await api(isUpdate ? '/api/update-panel' : '/api/restart-core', {
+			method: 'POST',
+			body: isUpdate ? (token ? { cf_token: token } : {}) : {}
+		});
 		var data = await res.json().catch(function () { return {}; });
+		if (res.status === 400 && data.error === 'TOKEN_REQUIRED') { openModal('modalToken'); return; }
 		if (res.ok && data.success) {
-			toast('پنل ری‌استارت شد، صفحه رفرش می‌شود.', 'ok');
-			window.location.href = window.location.pathname + '?t=' + Date.now();
+			if (isUpdate) {
+				toast('✅ آپدیت با موفقیت اعمال شد. صفحه در حال بارگذاری مجدد...', 'ok', 8000);
+				setTimeout(function () {
+					try { sessionStorage.setItem('lml_last_update', Date.now()); } catch (e) { }
+					window.location.href = window.location.pathname + '?t=' + Date.now();
+				}, 10000);
+			} else {
+				toast('پنل ری‌استارت شد، صفحه رفرش می‌شود.', 'ok');
+				window.location.href = window.location.pathname + '?t=' + Date.now();
+			}
 		} else {
-			toast('خطا در ری‌استارت پنل: ' + (data.error || 'ناشناخته'), 'err');
+			toast(isUpdate ? 'خطا در بروزرسانی. دوباره تلاش کنید یا توکن کلودفلر را بررسی کنید.' : ('خطا در ری‌استارت پنل: ' + (data.error || 'ناشناخته')), 'err');
 		}
 	} catch (err) {
-		toast('خطا در ارتباط با سرور.', 'err');
+		toast(isUpdate ? 'خطا در ارتباط با سرور. دوباره تلاش کنید.' : 'خطا در ارتباط با سرور.', 'err');
 	}
 }
 window.handleCoreAction = handleCoreAction;
@@ -14992,12 +14409,6 @@ function openQuickModal() {
 	if (sel && !sel.options.length) {
 		sel.innerHTML = QUICK_ISP.map(function (o) { return '<option value="' + o.id + '">' + esc(o.label) + ' — ' + esc(o.hint) + '</option>'; }).join('');
 	}
-	var pc = $('quickProxyCountry');
-	if (pc && !pc.options.length) {
-		pc.innerHTML = ['AUTO'].concat(PSCAN_COUNTRIES.filter(function (c) { return c !== 'ALL'; })).map(function (c) {
-			return '<option value="' + c + '">' + (c === 'AUTO' ? '🤖 خودکار (تست چند کشور)' : (flagText(c) + ' ' + c)) + '</option>';
-		}).join('');
-	}
 	openModal('modalQuick');
 	renderQuickPreview();
 }
@@ -15012,92 +14423,7 @@ function renderQuickPreview() {
 		'<div class="kv"><span class="k">Fingerprint</span><span class="v mono">chrome</span></div>' +
 		'<div class="kv"><span class="k">آی‌پی تمیز</span><span class="v">۲۰ آی‌پی کلودفلر + چرخش خودکار</span></div>' +
 		'<div class="kv"><span class="k">فرگمنت (اینترنت شما)</span><span class="v mono">' + esc(o.len) + ' · ' + esc(o.int) + ' ms</span></div>' +
-		'<div class="kv"><span class="k">پروکسی خروجی</span><span class="v">از منابع خود پنل + تست پینگ</span></div>' +
-		'<div class="kv"><span class="k">اتصال مستقیم 🌐</span><span class="v">' +
-			(($('quickOutMode') && $('quickOutMode').value === 'direct') ? 'فقط مستقیم'
-				: (($('quickOutMode') && $('quickOutMode').value === 'mixed') ? 'مخلوط با پروکسی' : 'غیرفعال')) +
-		'</span></div>';
-}
-/* ============================================================
-   PROXY-ROUTE PATCH 2 - quick create attaches a tested upstream proxy
-   (enable_direct=false, auto_rotate_user_proxy=1) instead of handing
-   out direct configs. Candidates come from the panel's own
-   /api/proxy-list endpoint (proxyscrape + public lists), not from any
-   third-party panel's proxy pool.
-   ============================================================ */
-function lmlQuickSelectedCountry() {
-	var picked = ($('quickProxyCountry') && $('quickProxyCountry').value) || 'AUTO';
-	return picked === 'AUTO' ? '' : picked;
-}
-async function lmlQuickProxyCountries() {
-	var picked = lmlQuickSelectedCountry();
-	if (picked) return [picked, 'ALL'];
-	var pool = ['DE', 'NL', 'FR', 'GB', 'US', 'TR'];
-	return pool.sort(function () { return 0.5 - Math.random(); }).slice(0, 3).concat(['ALL']);
-}
-async function lmlQuickFetchCandidates(country, limit) {
-	try {
-		var res = await api('/api/proxy-list', { method: 'POST', body: { limit: limit, country: country } });
-		var d = await res.json().catch(function () { return {}; });
-		return (d && d.proxies && d.proxies.length) ? d.proxies.slice(0, 30) : [];
-	} catch (e) { return []; }
-}
-async function lmlPickQuickProxies(want, onStage) {
-	want = Math.max(1, Math.min(parseInt(want, 10) || 1, 4));
-	var countries = await lmlQuickProxyCountries();
-	var explicit = lmlQuickSelectedCountry();
-	/* candidates stay grouped per country: the picked country is drained first,
-	   the worldwide pool only pads the list */
-	var groups = [], seenC = {}, total = 0;
-	for (var i = 0; i < countries.length && total < 40; i++) {
-		if (onStage) onStage('دریافت پروکسی‌های زنده (' + countries[i] + ')...');
-		var got = await lmlQuickFetchCandidates(countries[i], 80);
-		var g = [];
-		for (var gi = 0; gi < got.length; gi++) {
-			var c = String(got[gi] || '').trim();
-			if (!c || seenC[c]) continue;
-			seenC[c] = 1;
-			g.push(c);
-		}
-		if (g.length) { groups.push(g); total += g.length; }
-		if (total >= 16) break;
-	}
-	if (!total) return [];
-	if (onStage) onStage('تست ' + total + ' پروکسی و انتخاب سالم‌ها...');
-	var healthy = [], done = 0, flat = [];
-	for (var a = 0; a < groups.length; a++) {
-		for (var b = 0; b < groups[a].length; b++) flat.push({ p: groups[a][b], g: a });
-	}
-	var tasks = flat.map(function (it) {
-		return api('/api/test-proxy', { body: { proxy: it.p, skip_country: true } })
-			.then(function (r) { return r.json().catch(function () { return {}; }); })
-			.then(function (d) {
-				done++;
-				if (d && d.success && typeof d.ping === 'number') healthy.push({ proxy: it.p, ping: d.ping, country: d.country || '', g: it.g });
-			})
-			.catch(function () { done++; });
-	});
-	var guard = null;
-	await Promise.race([Promise.all(tasks), new Promise(function (r) { guard = setTimeout(r, 20000); })]);
-	if (guard) clearTimeout(guard);
-	healthy.sort(function (x, y) { return x.ping - y.ping; });
-	var out = [], usedCc = {};
-	for (var gi2 = 0; gi2 < groups.length && out.length < want; gi2++) {
-		var relax = !!explicit && gi2 === 0;
-		for (var k = 0; k < healthy.length && out.length < want; k++) {
-			if (healthy[k].g !== gi2) continue;
-			var cc = healthy[k].country || 'UN';
-			if (!relax && out.length && usedCc[cc] && healthy.length > want) continue;
-			usedCc[cc] = 1;
-			out.push({ proxy: healthy[k].proxy, ping: healthy[k].ping, country: healthy[k].country });
-		}
-	}
-	if (onStage) onStage('نتیجه: ' + done + '/' + total + ' تست شد' + (out.length ? (' — ' + out.length + ' پروکسی سالم (' + out.map(function (x) { return x.country || '?'; }).join(', ') + ')') : ' — هیچ پروکسی سالمی نبود'));
-	return out;
-}
-async function lmlPickQuickProxy(onStage) {
-	var list = await lmlPickQuickProxies(1, onStage);
-	return list.length ? list[0] : null;
+		'<div class="kv"><span class="k">اتصال مستقیم</span><span class="v">فعال</span></div>';
 }
 async function runQuickCreate() {
 	var o = quickIsp();
@@ -15110,31 +14436,9 @@ async function runQuickCreate() {
 	if (!days || parseInt(days, 10) <= 0) { toast('⚠️ مدت اعتبار (روز) را وارد کنید', 'warn'); return; }
 	if (btn) { btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
 	try {
-		var outMode = ($('quickOutMode') && $('quickOutMode').value) || 'proxy';
-		var allowDirect = (outMode === 'direct');
-		try {
-			if (localStorage.getItem('lml_quick_allow_direct') === '1' || localStorage.getItem('lml_patch_off') === '1') allowDirect = true;
-		} catch (e) { }
-		var pickedProxy = null;
-		var pickedProxies = [];
-		function say(t) { if (btn) btn.textContent = t; }
-		if (outMode !== 'direct') {
-			say('در حال پیدا کردن پروکسی سالم...');
-			toast('⏳ در حال پیدا کردن پروکسی سالم برای ساخت کانفیگ...', 'info');
-			pickedProxies = await lmlPickQuickProxies(outMode === 'mixed' ? 3 : 1, say);
-			pickedProxy = pickedProxies.length ? pickedProxies[0] : null;
-		}
-		if (!pickedProxy && !allowDirect) {
-			toast('⚠️ هیچ پروکسی سالمی پیدا نشد؛ ساخت متوقف شد تا کانفیگ مستقیم و خراب تحویل ندهیم. برای ساخت مستقیم، حالت خروجی را روی «فقط مستقیم» بگذارید یا کلید lml_quick_allow_direct را در localStorage روی 1 بگذارید.', 'err');
-			return;
-		}
-		if (!pickedProxy && !allowDirect) return;
-		if (!pickedProxy && allowDirect && outMode !== 'direct') toast('⚠️ پروکسی سالم پیدا نشد — کانفیگ مستقیم ساخته می‌شود', 'warn');
 		var ips = '';
 		try {
-			/* WORLDWIDE: /api/scan-ips is disabled in this build (410), so pull the
-			   merged clean-IP pool (ipdb + vfarid + vendor list + official ranges) */
-			var ipRes = await api('/api/clean-ips', { method: 'POST', body: { count: 20 } });
+			var ipRes = await api('/api/scan-ips', { method: 'POST', body: { providers: ['cf'], count: 20 } });
 			var ipData = await ipRes.json().catch(function () { return {}; });
 			if (ipData && ipData.ips && ipData.ips.length) ips = ipData.ips.join('\\n');
 		} catch (e) { }
@@ -15148,12 +14452,10 @@ async function runQuickCreate() {
 					tls: 'on', port: '443,2053,2083,2087,8443', ips: ips, fingerprint: 'chrome', ip_limit: null,
 					block_porn: 0, block_ads: 0, frag_len: o.len, frag_int: o.int,
 					advanced_frag: null, cipher_suites: null, tls_mask: null,
-					user_proxy_iata: null,
-					user_socks5: pickedProxies.length ? JSON.stringify(pickedProxies.map(function (x) { return { proxy: x.proxy, country: x.country || '' }; })) : null,
-					user_proxy_ip: null,
+					user_proxy_iata: null, user_socks5: null, user_proxy_ip: null,
 					auto_reset_vol_days: 0, auto_reset_req_days: 0, auto_rotate_ip: 1, rotate_time: 0,
-					ip_operator: 'all', ip_count: 20, auto_rotate_user_proxy: pickedProxies.length ? 1 : 0,
-					start_on_first_connect: 0, enable_direct: (outMode === 'mixed') ? true : (pickedProxies.length ? false : true),
+					ip_operator: 'all', ip_count: 20, auto_rotate_user_proxy: 0,
+					start_on_first_connect: 0, enable_direct: true,
 					connection_type: 'vless', protocols: ['vless']
 				}
 			});
@@ -15163,8 +14465,7 @@ async function runQuickCreate() {
 		}
 		if (made.length) {
 			closeModal('modalQuick');
-			toast('✅ ' + made.length + ' کانفیگ با بهترین تنظیمات (' + o.label + ')' +
-				(pickedProxies.length ? (' — ' + pickedProxies.length + ' پروکسی: ' + pickedProxies.map(function (x) { return x.country || 'UN'; }).join(', ') + (outMode === 'mixed' ? ' + کانفیگ مستقیم (مخلوط)' : '')) : ' — بدون پروکسی'), 'ok');
+			toast('✅ ' + made.length + ' کانفیگ با بهترین تنظیمات (' + o.label + ') ساخته شد', 'ok');
 			await loadUsers();
 			if (made.length === 1) {
 				var u = State.allUsers.filter(function (x) { return x.username === made[0]; })[0];
@@ -15787,8 +15088,8 @@ reseller: `<!DOCTYPE html>
 				
 				const limitGb = u.limit_gb ? parseFloat(u.limit_gb).toFixed(1) : 'نامحدود';
 				const usedGb = parseFloat(u.used_gb || 0).toFixed(2);
-				const subUrl = window.location.origin + '/sub/' + encodeURIComponent(u.username);
-				const statusUrl = window.location.origin + '/status/' + encodeURIComponent(u.username);
+				const subUrl = lmlPanelOrigin() + '/sub/' + encodeURIComponent(u.username);
+				const statusUrl = lmlPanelOrigin() + '/status/' + encodeURIComponent(u.username);
 				
 				const isActive = u.is_active === 1;
 				const statusBadge = isActive 
@@ -15895,8 +15196,8 @@ reseller: `<!DOCTYPE html>
 		}
 
 		function showConfigResultModal(uname) {
-			const subUrl = window.location.origin + '/sub/' + encodeURIComponent(uname);
-			const statusUrl = window.location.origin + '/status/' + encodeURIComponent(uname);
+			const subUrl = lmlPanelOrigin() + '/sub/' + encodeURIComponent(uname);
+			const statusUrl = lmlPanelOrigin() + '/status/' + encodeURIComponent(uname);
 			
 			document.getElementById('result-sub-url-input').value = subUrl;
 			document.getElementById('btn-open-client-status').href = statusUrl;
@@ -15925,15 +15226,13 @@ reseller: `<!DOCTYPE html>
 
 		function copyResultSubUrl() {
 			const url = document.getElementById('result-sub-url-input').value;
-			navigator.clipboard.writeText(url).then(() => {
-				showToast('📋 لینک سابسکریپشن مشتری کپی شد!');
-			});
+			if (typeof lmlCopy === 'function') { lmlCopy(url); return; }
+			navigator.clipboard.writeText(url).then(function () { showToast('OK'); }).catch(function () { });
 		}
 
 		function copyClientSub(url) {
-			navigator.clipboard.writeText(url).then(() => {
-				showToast('📋 لینک اتصال کپی شد!');
-			});
+			if (typeof lmlCopy === 'function') { lmlCopy(url); return; }
+			navigator.clipboard.writeText(url).then(function () { showToast('OK'); }).catch(function () { });
 		}
 
 		async function deleteResellerUser(uname) {
@@ -16213,15 +15512,27 @@ ${COMMON_TOAST_HTML}
 		function getHost() {
 			return window.location.host;
 		}
+		/* v1.0.6: real panel domain - an IP typed in the browser never leaks into links */
+		function lmlHostSafe() {
+			try {
+				if (window.LML_PANEL_HOST && window.LML_PANEL_HOST.length) return window.LML_PANEL_HOST;
+			} catch (e) { }
+			var h = window.location.hostname || '';
+			if (/^[0-9.]+$/.test(h)) { try { if (window.LML_PANEL_HOST) return window.LML_PANEL_HOST; } catch (e) { } }
+			return h || 'workers.dev';
+		}
+		function lmlHttpTwinPort(p) {
+			var m = { '443': '80', '2053': '2052', '2083': '2082', '2087': '2086', '2096': '2095', '8443': '8080' };
+			return m[String(p)] || '80';
+		}
 		function getvIeesLink() {
 			const u = window.statusUser;
 			if (!u) return '';
-			const host = getHost();
+			const host = lmlHostSafe();
+			/* TLS links always use the domain; IPs only on plain-HTTP ports -> no SSL error ever */
 			var ips = [host];
-			if (u.ips) {
-				const parsedIps = u.ips.split('\\n').map(function(ip) { return ip.trim(); }).filter(function(ip) { return ip.length > 0; });
-				if (parsedIps.length > 0) ips = parsedIps;
-			}
+			var cleanIps = [];
+			if (Array.isArray(u.ips_valid)) cleanIps = u.ips_valid.slice(0, 40);
 			var ports = String(u.port || '443').split(',').map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; });
 			/* TLS-ONLY: keep encrypted (TLS) ports only; never leave the list empty */
 			var STATUS_TLS_PORTS = ["443", "2053", "2083", "2087", "2096", "8443"];
@@ -16292,10 +15603,15 @@ ${COMMON_TOAST_HTML}
 			const enableVless = userConnType.includes('vless') || userConnType === 'vl' + 'e' + 'ss' || (!userConnType.includes('trojan') && !userConnType.includes('shadowsocks'));
 			const enableTrojan = userConnType.includes('trojan');
 			const enableSS = userConnType.includes('shadowsocks');
-			ips.forEach((ip) => {
-				ports.forEach((portStr) => {
-					resolvedProxies.forEach((proxy) => {
-						const isTlsPort = ["443", "2053", "2083", "2087", "2096", "8443"].includes(portStr);
+			var lmlEntries = [];
+			cleanIps.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
+			ips.forEach(function (hh) { ports.forEach(function (p) { lmlEntries.push({ addr: hh, port: p, tls: true, ip: '' }); }); });
+			cleanIps.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: lmlHttpTwinPort(p), tls: false, ip: cip }); }); });
+			lmlEntries.forEach((entry) => {
+				resolvedProxies.forEach((proxy) => {
+						const ip = entry.addr;
+						const portStr = entry.port;
+						const isTlsPort = entry.tls;
 						const tlsVal = isTlsPort ? "tls" : "none";
 						let userFrag = "";
 						if (u.frag_len && u.frag_int) userFrag += "&fragment=" + encodeURIComponent(u.frag_len + "," + u.frag_int + (isTlsPort ? ",tlshello" : ""));
@@ -16303,18 +15619,19 @@ ${COMMON_TOAST_HTML}
 						if (isTlsPort && u.cipher_suites) userFrag += "&cs=" + encodeURIComponent(u.cipher_suites);
 						if (u.tls_mask) userFrag += "&mask=" + encodeURIComponent(u.tls_mask);
 						
-						const tlsParams = isTlsPort ? ("&insecure=0&fp=" + fp + "&allowInsecure=0&sni=" + host) : "";
+						const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
+						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host) : "";
 
 						if (enableVless) {
-							const remark = "LML | " + proxy.flagEmoji + " | " + u.username;
+							const remark = "LML | " + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " \ud83d\udd12") + " | " + u.username;
 							links.push('vle' + 'ss://' + (u.uuid || '') + '@' + ip + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&encryption=none&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
 						}
 						if (enableTrojan) {
-							const trojanRemark = "LML | " + proxy.flagEmoji + " | " + u.username;
+							const trojanRemark = "LML | " + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " \ud83d\udd12") + " | " + u.username;
 							links.push('trojan://' + (u.uuid || '') + '@' + ip + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(trojanRemark));
 						}
 						if (enableSS) {
-							const ssRemark = "LML | " + proxy.flagEmoji + " | " + u.username;
+							const ssRemark = "LML | " + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " \ud83d\udd12") + " | " + u.username;
 							const methodPass = btoa("aes-256-gcm:" + (u.uuid || ''));
 							let pluginOpts = "v2ray-plugin;mode=websocket;host=" + host + ";path=" + decodeURIComponent(proxy.currentDynPath) + (isTlsPort ? ";tls" : "");
 							let pluginStr = encodeURIComponent(pluginOpts);
@@ -16322,19 +15639,18 @@ ${COMMON_TOAST_HTML}
 						}
 					});
 				});
-			});
 			return links.join('\\n');
 		}
 		function copyvIeesConfig() {
-			navigator.clipboard.writeText(getvIeesLink()).then(() => alert('✅ کـانفـیگ با موفقیت کپی شد!'));
+				lmlCopy(getvIeesLink() || '');
 		}
 		function copyTextSub() {
-			const link = window.location.protocol + '//' + getHost() + '/sub/' + encodeURIComponent(window.statusUser.username);
-			navigator.clipboard.writeText(link).then(() => alert('✅ لینک ساب متنی کپی شد!'));
+			const link = window.location.protocol + '//' + lmlHostSafe() + '/sub/' + encodeURIComponent(window.statusUser.username);
+			lmlCopy(link);
 		}
 		function copySingboxSub() {
-			const link = window.location.protocol + '//' + getHost() + '/singbox/' + encodeURIComponent(window.statusUser.username);
-			navigator.clipboard.writeText(link).then(() => alert('✅ لینک ساب Sing-box کپی شد!'));
+			const link = window.location.protocol + '//' + lmlHostSafe() + '/singbox/' + encodeURIComponent(window.statusUser.username);
+			lmlCopy(link);
 		}
 		function toggleQrModal(show, text) {
 			const modal = document.getElementById('qr-modal');
@@ -16608,7 +15924,8 @@ const flagContainer = document.getElementById('display-flag');
 		});
 		// LML 1-Click App Deep Links & Live Ping Test
 		try {
-			const currentSubUrl = window.location.origin + '/sub/' + (typeof u !== 'undefined' && u.name ? u.name : window.location.pathname.split('/').pop());
+			const lmlPageHost = window.LML_PANEL_HOST ? (location.protocol + '//' + window.LML_PANEL_HOST) : window.location.origin;
+			const currentSubUrl = lmlPageHost + '/sub/' + (typeof u !== 'undefined' && u.name ? u.name : window.location.pathname.split('/').pop());
 			const v2Btn = document.getElementById('btn-v2rayng');
 			if (v2Btn) v2Btn.href = 'v2rayng://install-config?url=' + encodeURIComponent(currentSubUrl);
 			const hidBtn = document.getElementById('btn-hiddify');
