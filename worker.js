@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1";
+const LML_PANEL_VERSION = "1.0.2";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -355,6 +355,93 @@ async function lmlAutoTestIps(ipsList, env, hostName) {
 		await lmlSaveIpTestResults(results, env);
 	} catch (e) { }
 }
+/* ============================================================
+   LML EXTERNAL LIVE IP SOURCE — منبع آی‌پی زندهٔ خارجی
+   مدیر لینک اشتراک هر سرویسی را می‌دهد؛ ورکر آن را سمت سرور
+   دریافت کرده، آی‌پی‌ها را استخراج و به «مخزن آی‌پی LML»
+   اضافه می‌کند (زنده، کش ۱۰ دقیقه، بدون خطا، بدون نام ثالث).
+   ============================================================ */
+const LML_REPO_JSON_URL = "https://raw.githubusercontent.com/" + UPDATE_REPO_WORKER + "/main/live-ips.json";
+let LML_REPO_IPS_MEM = { at: 0, ips: null };
+let LML_EXT_IPS_MEM = { at: 0, url: "", ips: null };
+function lmlParseIpsFromSub(text) {
+	try {
+		let t = String(text || "");
+		if (!t) return [];
+		if (t.indexOf("://") < 0) {
+			try {
+				const b64 = t.replace(/[^A-Za-z0-9+/=]/g, "");
+				if (b64.length > 40) t = decodeURIComponent(escape(atob(b64)));
+			} catch (e) { }
+		}
+		const ips = [];
+		const seen = {};
+		const pushIp = function (x) {
+			x = String(x || "").trim();
+			if (/^\d{1,3}(\.\d{1,3}){3}$/.test(x) && x.split(".").every(function (n) { return Number(n) <= 255; }) && !seen[x]) {
+				seen[x] = 1;
+				ips.push(x);
+			}
+		};
+		const reLink = /(vless|trojan|ss|vmess):\/\/([^\s"'<]+)/g;
+		let m;
+		while ((m = reLink.exec(t)) !== null) {
+			const proto = m[1];
+			const rest = m[2];
+			if (proto === "vmess") {
+				try {
+					const j = JSON.parse(decodeURIComponent(escape(atob(rest.split("?")[0]))));
+					pushIp(j && j.add);
+				} catch (e) { }
+				continue;
+			}
+			const at = rest.lastIndexOf("@");
+			if (at < 0) continue;
+			let addr = rest.slice(at + 1).split(/[/?#]/)[0];
+			if (addr.indexOf("[") >= 0) continue;
+			pushIp(addr.split(":")[0]);
+		}
+		return ips.slice(0, 60);
+	} catch (e) { return []; }
+}
+async function lmlFetchUrlText(urlStr, ms) {
+	try {
+		const r = await updateFetchWorker(String(urlStr), { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" } }, ms || 8000);
+		if (!r || !r.ok) return "";
+		return await r.text();
+	} catch (e) { return ""; }
+}
+async function lmlGetRepoIps() {
+	try {
+		const now = Date.now();
+		if (LML_REPO_IPS_MEM.ips !== null && (now - LML_REPO_IPS_MEM.at) < 300000) return LML_REPO_IPS_MEM.ips;
+		const txt = await lmlFetchUrlText(LML_REPO_JSON_URL + "?t=" + now, 6000);
+		let ips = [];
+		try {
+			const j = JSON.parse(txt);
+			if (j && j.enabled !== false && Array.isArray(j.ips)) ips = lmlOnlyCfIps(j.ips.map(function (x) { return String(x || "").trim(); }), 60);
+		} catch (e) { }
+		LML_REPO_IPS_MEM = { at: now, ips: ips };
+		return ips;
+	} catch (e) { return (LML_REPO_IPS_MEM.ips || []); }
+}
+async function lmlGetExtIps(env) {
+	try {
+		let srcUrl = "";
+		try {
+			const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ext_ip_source'").first();
+			if (row && row.value) srcUrl = String(row.value).trim();
+		} catch (e) { }
+		if (!srcUrl || !/^https?:\/\//i.test(srcUrl)) { LML_EXT_IPS_MEM = { at: Date.now(), url: "", ips: [] }; return []; }
+		const now = Date.now();
+		if (LML_EXT_IPS_MEM.ips !== null && LML_EXT_IPS_MEM.url === srcUrl && (now - LML_EXT_IPS_MEM.at) < 600000) return LML_EXT_IPS_MEM.ips;
+		const txt = await lmlFetchUrlText(srcUrl, 8000);
+		const ips = lmlParseIpsFromSub(txt);
+		LML_EXT_IPS_MEM = { at: now, url: srcUrl, ips: ips };
+		return ips;
+	} catch (e) { return (LML_EXT_IPS_MEM.ips || []); }
+}
+
 /* دامنه‌ی واقعی پنل: هرگز آی‌پی نمی‌شود (منبع خطای SSL در مرورگر همین بود) */
 let LML_PANEL_HOST_CACHE = "";
 async function lmlPanelHostSave(env, host) {
@@ -2066,6 +2153,39 @@ const Router = {
 				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
 			}
 		}
+		if (url.pathname === "/api/ip-repo" && request.method === "GET") {
+			try {
+				const session = await DbService.getSession(request, env);
+				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				const repoIps = await lmlGetRepoIps();
+				const extIps = await lmlGetExtIps(env);
+				let extSet = false;
+				try { const r2 = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ext_ip_source'").first(); extSet = !!(r2 && r2.value && String(r2.value).trim()); } catch (e) { }
+				return new Response(JSON.stringify({ success: true, repo: repoIps, ext: extIps, ext_set: extSet }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+			} catch (e) {
+				return new Response(JSON.stringify({ success: false, repo: [], ext: [], ext_set: false }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
+			}
+		}
+		if (url.pathname === "/api/ext-ip-source" && (request.method === "GET" || request.method === "POST")) {
+			try {
+				const session = await DbService.getSession(request, env);
+				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				if (request.method === "GET") {
+					let v = "";
+					try { const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ext_ip_source'").first(); if (row && row.value) v = String(row.value); } catch (e) { }
+					return new Response(JSON.stringify({ success: true, url: v }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+				}
+				const body = await readJsonBody(request);
+				const v = String((body && body.url) || "").trim().slice(0, 500);
+				if (v && !/^https?:\/\//i.test(v)) return new Response(JSON.stringify({ error: "لینک باید با http یا https شروع شود" }), { status: 400, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lml_ext_ip_source', ?)").bind(v).run();
+				LML_EXT_IPS_MEM = { at: 0, url: "", ips: null };
+				const found = v ? await lmlGetExtIps(env) : [];
+				return new Response(JSON.stringify({ success: true, url: v, found: found.length, ips: found.slice(0, 60) }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+			} catch (e) {
+				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+			}
+		}
 		if (url.pathname === "/api/ip-pool" && request.method === "GET") {
 			try {
 				const session = await DbService.getSession(request, env);
@@ -2831,6 +2951,8 @@ const Router = {
 				GLOBAL_IPS_CACHE = {};
 				GLOBAL_IPS_LAST_FETCH = 0;
 				PROXY_CC_CACHE.clear();
+				LML_REPO_IPS_MEM = { at: 0, ips: null };
+				LML_EXT_IPS_MEM = { at: 0, url: "", ips: null };
 				LML_IP_TEST_MEM = { at: 0, bad: null, cc: null };
 				cachedVipCountries = [];
 				lastVipCountriesFetch = 0;
@@ -9812,9 +9934,16 @@ const HTML_TEMPLATES = {
 <h4>۱. دریافت و اجرا</h4><p>روی ویندوز Python 3.9 یا جدیدتر، و روی اندروید Pydroid نصب کنید. فایل را دانلود و اجرا کنید؛ رابط در مرورگر باز می‌شود. اگر خودکار باز نشد، آدرس چاپ‌شده در ترمینال را باز کنید.</p><a class="btn btn-primary" href="/lml-scanner/download" download>دانلود موتور مستقل</a><pre dir="ltr">python LML-Scanner.py</pre>
 <h4>۲. تست دامنهٔ خودتان</h4><p>دامنه همین پنل را در اسکنر وارد کنید. فایل Worker جدید باید قبلاً مستقر شده باشد. پس از اسکن، «خروجی JSON برای پنل» بگیرید.</p>
 <h4>۳. ورود و اعمال نتایج</h4><input class="input" type="file" id="lmlScanFile" accept=".json,application/json"><label>حداکثر آی‌پی قابل اعمال<input class="input" id="ipCount" type="number" min="1" max="100" value="10"></label><p id="lmlImportSummary">فایلی انتخاب نشده است.</p><div id="ipLoading" class="scan-log hidden"></div><p>نتایج مربوط به اینترنتِ زمان تست هستند. هنگام اعمال، چرخش تصادفی خاموش می‌شود. سپس فرم کاربر را ذخیره کنید. برای تست مجدد همان آی‌پی‌ها، آن‌ها را در بخش دلخواه اسکنر وارد کنید.</p>
-<h4>📦 مخزن آی‌پی LML (زنده)</h4>
+<h4>📦 مخزن آی‌پی LML (رسمی — زنده)</h4>
 <p id="lmlGhRepoInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت مخزن LML...</p>
 <div id="lmlGhRepoList" class="scan-log" style="max-height:150px;overflow:auto"></div>
+<h4 style="margin-top:12px">🔗 منبع زندهٔ خارجی (لینک اشتراک دلخواه)</h4>
+<div style="display:flex;gap:8px;margin:6px 0">
+<input class="input" id="lmlExtSourceInput" dir="ltr" placeholder="https://example.com/sub?token=..." style="flex:1;font-size:11.5px">
+<button type="button" class="btn btn-sm" id="btnSaveExtSource">ذخیرهٔ منبع</button>
+</div>
+<p id="lmlExtSourceStatus" style="font-size:11.5px;color:var(--text-3)">منبعی تنظیم نشده — لینک اشتراک هر سرویسی را اینجا ذخیره کنید تا آی‌پی‌هایش زنده و خودکار به مخزن LML اضافه شود.</p>
+<div id="lmlExtRepoList" class="scan-log" style="max-height:150px;overflow:auto"></div>
 <h4 style="margin-top:14px">🏆 آی‌پی‌های تأییدشده (تست خودکار از سراسر ایران)</h4>
 <p id="lmlPoolInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت...</p>
 <div id="lmlPoolList" class="scan-log" style="max-height:150px;overflow:auto"></div>
@@ -9967,7 +10096,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1';
+var CURRENT_VERSION = '1.0.2';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -12301,42 +12430,42 @@ on($('btnOpenIpRepo3'), 'click', openIpRepoModal);
    مخزن آی‌پی گیت‌هاب (live-ips.json) — فقط افزودن دستی توسط مدیر
    هیچ آی‌پی‌ای به‌صورت خودکار به کاربران اضافه نمی‌شود.
    ============================================================ */
-var LML_GH_REPO_URL = 'https://raw.githubusercontent.com/nukesamp-crypto/LML-PANEL/main/live-ips.json';
-var lmlGhRepoCache = { at: 0, ips: null };
 async function lmlLoadGhRepo() {
 	var info = $('lmlGhRepoInfo'), box = $('lmlGhRepoList'), btn = $('btnGhRepoAdd');
 	if (!info || !box || !btn) return;
-	var ghCount = 0;
+	function repoRow(ip) {
+		return '<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer"><input type="checkbox" class="lml-gh-ip" value="' + attr(ip) + '" checked><span class="mono" dir="ltr">' + esc(ip) + '</span></label>';
+	}
+	var total = 0;
 	try {
-		var fresh = (lmlGhRepoCache.ips !== null && (Date.now() - lmlGhRepoCache.at) < 60000);
-		if (!fresh) {
-			info.textContent = 'در حال دریافت مخزن LML...';
-			var res = await fetch(LML_GH_REPO_URL + '?t=' + Date.now(), { cache: 'no-store' });
-			if (!res.ok) throw new Error('HTTP ' + res.status);
-			var data = await res.json().catch(function () { return null; });
-			var ips = [];
-			if (data && data.enabled !== false && Array.isArray(data.ips)) {
-				var seenGh = {};
-				data.ips.forEach(function (x) {
-					x = String(x || '').trim();
-					if (/^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}$/.test(x) && x.split('.').every(function (n) { return Number(n) <= 255; }) && !seenGh[x]) {
-						seenGh[x] = 1; ips.push(x);
-					}
-				});
-			}
-			lmlGhRepoCache = { at: Date.now(), ips: ips };
-		}
-		var list = lmlGhRepoCache.ips || [];
-		ghCount = list.length;
-		if (!list.length) {
-			info.textContent = 'مخزن LML خالی است — فایل live-ips.json را در مخزن رسمی ویرایش کنید تا آی‌پی‌ها زنده اینجا ظاهر شوند.';
+		info.textContent = 'در حال دریافت مخزن LML...';
+		var res = await api('/api/ip-repo');
+		var d = await res.json().catch(function () { return {}; });
+		var repo = (d && Array.isArray(d.repo)) ? d.repo : [];
+		var ext = (d && Array.isArray(d.ext)) ? d.ext : [];
+		if (!repo.length) {
+			info.textContent = 'مخزن رسمی LML خالی است — فایل live-ips.json را در مخزن رسمی ویرایش کنید تا زنده اینجا ظاهر شود.';
 			box.innerHTML = '';
 		} else {
-			info.textContent = list.length + ' آی‌پی در مخزن رسمی LML (زنده) — انتخاب کنید و با دکمه زیر به فرم کاربر اضافه کنید:';
-			box.innerHTML = list.map(function (ip) {
-				return '<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer"><input type="checkbox" class="lml-gh-ip" value="' + attr(ip) + '" checked><span class="mono" dir="ltr">' + esc(ip) + '</span></label>';
-			}).join('');
+			info.textContent = repo.length + ' آی‌پی در مخزن رسمی LML (زنده):';
+			box.innerHTML = repo.map(repoRow).join('');
 		}
+		var ebox = $('lmlExtRepoList'), einfo = $('lmlExtSourceStatus'), einp = $('lmlExtSourceInput');
+		if (ebox) {
+			if (!ext.length) {
+				if (einfo) einfo.textContent = (d && d.ext_set) ? 'منبع ذخیره شده ولی هنوز آی‌پی‌ای از آن استخراج نشده (کش تا ۱۰ دقیقه یا منبع فعلاً آی‌پی ندارد).' : 'منبعی تنظیم نشده — لینک اشتراک هر سرویسی را اینجا ذخیره کنید تا آی‌پی‌هایش زنده و خودکار به مخزن LML اضافه شود.';
+				ebox.innerHTML = '';
+			} else {
+				if (einfo) einfo.textContent = ext.length + ' آی‌پی زنده از منبع خارجی استخراج شد:';
+				ebox.innerHTML = ext.map(repoRow).join('');
+			}
+		}
+		try {
+			var sr = await api('/api/ext-ip-source');
+			var sd = await sr.json().catch(function () { return {}; });
+			if (einp && sd && sd.url) einp.value = sd.url;
+		} catch (e3) { }
+		total = repo.length + ext.length;
 	} catch (e) {
 		info.textContent = 'دریافت مخزن ناموفق بود: ' + (e && e.message ? e.message : e);
 		box.innerHTML = '';
@@ -12363,8 +12492,34 @@ async function lmlLoadGhRepo() {
 		var pinfo2 = $('lmlPoolInfo');
 		if (pinfo2) pinfo2.textContent = 'استخر آی‌پی‌های تأییدشده در دسترس نیست.';
 	}
-	btn.disabled = !(ghCount > 0 || poolCount > 0);
+	btn.disabled = !(total > 0 || poolCount > 0);
 }
+async function lmlSaveExtSource() {
+	var inp = $('lmlExtSourceInput'), st = $('lmlExtSourceStatus'), b = $('btnSaveExtSource');
+	var v = ((inp && inp.value) || '').trim();
+	if (v && v.indexOf('http') !== 0) { toast('لینک باید با http یا https شروع شود.', 'err'); return; }
+	if (b) { b.disabled = true; b.textContent = 'در حال ذخیره...'; }
+	if (st) st.textContent = 'در حال ذخیره و دریافت آی‌پی‌ها از منبع...';
+	try {
+		var res = await api('/api/ext-ip-source', { method: 'POST', body: { url: v } });
+		var d = await res.json().catch(function () { return {}; });
+		if (d && d.success) {
+			toast(v ? ('✅ منبع زنده ذخیره شد — ' + (d.found || 0) + ' آی‌پی استخراج شد.') : '✅ منبع خارجی حذف شد.', 'ok');
+			await lmlLoadGhRepo();
+		} else {
+			toast('❌ ' + ((d && d.error) || 'ذخیره منبع ناموفق بود'), 'err');
+			if (st) st.textContent = 'ذخیره ناموفق بود.';
+		}
+	} catch (e) {
+		toast('❌ خطای سرور هنگام ذخیره منبع', 'err');
+		if (st) st.textContent = 'ذخیره ناموفق بود.';
+	} finally {
+		var b2 = $('btnSaveExtSource');
+		if (b2) { b2.disabled = false; b2.textContent = 'ذخیرهٔ منبع'; }
+	}
+}
+on($('btnSaveExtSource'), 'click', lmlSaveExtSource);
+window.lmlSaveExtSource = lmlSaveExtSource;
 function lmlAddGhRepoIps() {
 	var checked = $$('.lml-gh-ip').concat($$('.lml-pool-ip')).filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
 	if (!checked.length) { toast('هیچ آی‌پی‌ای از مخزن انتخاب نشده است.', 'warn'); return; }
