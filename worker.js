@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1";
+const LML_PANEL_VERSION = "1.0.0";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -1605,7 +1605,7 @@ const Router = {
 			const accept = request ? (request.headers.get("Accept") || "") : "";
 			const ua = request ? (request.headers.get("User-Agent") || "").toLowerCase() : "";
 
-			const isBrowserPortal = url.pathname.startsWith("/s/") || (format !== "raw" && !ua.includes("v2ray") && !ua.includes("clash") && !ua.includes("sing-box") && !ua.includes("hiddify") && (accept.includes("text/html") || accept.includes("*/*") || !ua));
+			const isBrowserPortal = url.pathname.startsWith("/s/") || (format !== "raw" && !url.pathname.startsWith("/singbox/") && !ua.includes("v2ray") && !ua.includes("clash") && !ua.includes("sing-box") && !ua.includes("hiddify") && (accept.includes("text/html") || accept.includes("*/*") || !ua));
 			if (isBrowserPortal) {
 				return new Response(renderUserPortal(user, host, url), {
 					headers: { 
@@ -1617,7 +1617,7 @@ const Router = {
 			if (format === "clash" || ua.includes("clash")) {
 				return await SubscriptionService.generateClash(user, host);
 			}
-			if (format === "singbox" || ua.includes("sing-box")) {
+			if (url.pathname.startsWith("/singbox/") || format === "singbox" || ua.includes("sing-box")) {
 				return await SubscriptionService.generateSingbox(user, host);
 			}
 			return await SubscriptionService.generateText(user, host, ctx, env, String((request.cf && request.cf.colo) || ""));
@@ -8528,7 +8528,7 @@ const HTML_TEMPLATES = {
 	<symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></symbol>
 	<symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></symbol>
 	<symbol id="i-heart" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></symbol>
-	<symbol id="i-megaphone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a1 1 0 0 0 1 1h2l4 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M14 8a5 5 0 0 1 0 8"/><path d="M17.5 5a9 9 0 0 1 0 14"/><path d="M7 14v4a2 2 0 0 0 4 0"/></symbol>
+	<symbol id="i-megaphone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></symbol>
 	<symbol id="i-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></symbol>
 	<symbol id="i-telegram" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></symbol>
 	<symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></symbol>
@@ -9962,33 +9962,6 @@ const HTML_TEMPLATES = {
 									<button type="button" class="btn btn-primary" id="btnPublicProxy"><svg><use href="#i-globe"/></svg>اسکن پروکسی عمومی</button>
 									<button type="button" class="btn" id="btnSocksRepo"><svg><use href="#i-bolt"/></svg>مخزن ساکس پروکسی (زنده)</button>
 								</div>
-								<div class="field" style="margin-top:14px">
-									<label for="fGeoLocation">🌍 موقعیت مکانی خروجی (بدون وارد کردن آی‌پی یا ساکس)</label>
-									<div class="input-group">
-										<select class="select" id="fGeoLocation">
-											<option value="">— بدون تغییر لوکیشن —</option>
-											<option value="DE">🇩🇪 آلمان</option>
-											<option value="NL">🇳🇱 هلند</option>
-											<option value="FR">🇫🇷 فرانسه</option>
-											<option value="GB">🇬🇧 انگلستان</option>
-											<option value="SE">🇸🇪 سوئد</option>
-											<option value="ES">🇪🇸 اسپانیا</option>
-											<option value="IT">🇮🇹 ایتالیا</option>
-											<option value="PL">🇵🇱 لهستان</option>
-											<option value="TR">🇹🇷 ترکیه</option>
-											<option value="RU">🇷🇺 روسیه</option>
-											<option value="UA">🇺🇦 اوکراین</option>
-											<option value="US">🇺🇸 آمریکا</option>
-											<option value="CA">🇨🇦 کانادا</option>
-											<option value="JP">🇯🇵 ژاپن</option>
-											<option value="SG">🇸🇬 سنگاپور</option>
-											<option value="IN">🇮🇳 هند</option>
-											<option value="AE">🇦🇪 امارات</option>
-										</select>
-										<button type="button" class="btn btn-primary" id="btnApplyGeo">وصل کن به این کشور</button>
-									</div>
-									<span class="hint">کشور را انتخاب و کلیک کنید — پنل به‌صورت <b>زنده</b> چند ساکس پروکسی سالم و تست‌شده از همان کشور پیدا کرده و خودکار در فیلدهای پروکسی بالا می‌گذارد (بدون اینکه خودتان آی‌پی یا ساکس وارد کنید). خروجی کانفیگ‌ها همان کشور می‌شود — مناسب ChatGPT و سرویس‌های خارجی. تعویض خودکار پروکسی خراب هم روشن می‌شود.</span>
-								</div>
 								<div class="switch-row" style="margin-top:12px">
 									<div class="sr-text">
 										<div class="sr-t">تعویض خودکار پروکسی خروجی خراب</div>
@@ -10457,7 +10430,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1';
+var CURRENT_VERSION = '1.0.0';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -11764,6 +11737,39 @@ function copyConfig(username) {
 }
 function copySubLink(enc) { var u = decodeURIComponent(enc); copyText(getSubLink(u), '✅ لینک سابسکریپشن کپی شد!'); }
 function copySingboxLink(enc) { var u = decodeURIComponent(enc); copyText(getSingboxLink(u), '✅ لینک Sing-box کپی شد!'); }
+/* گرفتن مستقیم JSON کانفیگ از پنل (کپی یا دانلود فایل) */
+async function copySingboxJson(username) {
+	try {
+		toast('⏳ در حال دریافت JSON کانفیگ...', 'info');
+		var res = await fetch(getSingboxLink(username), { cache: 'no-store' });
+		if (!res.ok) throw new Error('HTTP ' + res.status);
+		var txt = await res.text();
+		if (!txt || txt.charAt(0) !== '{') throw new Error('سرور JSON برنگرداند');
+		lmlCopy(txt, '✅ JSON کانفیگ کپی شد!');
+	} catch (e) {
+		toast('❌ دریافت JSON ناموفق: ' + (e && e.message ? e.message : e), 'err', 9000);
+	}
+}
+async function downloadSingboxJson(username) {
+	try {
+		var res = await fetch(getSingboxLink(username), { cache: 'no-store' });
+		if (!res.ok) throw new Error('HTTP ' + res.status);
+		var txt = await res.text();
+		if (!txt || txt.charAt(0) !== '{') throw new Error('سرور JSON برنگرداند');
+		var blob = new Blob([txt], { type: 'application/json' });
+		var a = document.createElement('a');
+		a.href = URL.createObjectURL(blob);
+		a.download = 'lml-' + username + '-singbox.json';
+		document.body.appendChild(a);
+		a.click();
+		setTimeout(function () { try { URL.revokeObjectURL(a.href); a.parentNode.removeChild(a); } catch (e2) { } }, 800);
+		toast('✅ فایل JSON دانلود شد: lml-' + username + '-singbox.json', 'ok');
+	} catch (e) {
+		toast('❌ دانلود JSON ناموفق: ' + (e && e.message ? e.message : e), 'err', 9000);
+	}
+}
+window.copySingboxJson = copySingboxJson;
+window.downloadSingboxJson = downloadSingboxJson;
 function copyStatusLink(enc) { var u = decodeURIComponent(enc); copyText(getStatusLink(u), '✅ لینک وضعیت کپی شد!'); }
 window.copyConfig = copyConfig;
 window.copySubLink = copySubLink;
@@ -11914,6 +11920,8 @@ function userMenu(anchor, username) {
 		{ head: 'اشتراک' },
 		{ icon: 'copy', label: 'کپی لینک سابسکریپشن', action: function () { copySubLink(enc); } },
 		{ icon: 'link', label: 'کپی لینک Sing-box', action: function () { copySingboxLink(enc); } },
+		{ icon: 'copy', label: '📄 کپی JSON کانفیگ', action: function () { copySingboxJson(username); } },
+		{ icon: 'download', label: '⬇️ دانلود JSON کانفیگ', action: function () { downloadSingboxJson(username); } },
 		{ icon: 'copy', label: 'کپی کانفیگ‌ها', action: function () { copyConfig(username); } },
 		{ icon: 'activity', label: 'کپی لینک وضعیت', action: function () { copyStatusLink(enc); } },
 		{ icon: 'qr', label: 'نمایش کد QR', action: function () { showSubQr(enc); } },
@@ -12979,42 +12987,6 @@ on($('socksRepoList'), 'click', function (e) {
 });
 window.lmlLoadSocksRepo = lmlLoadSocksRepo;
 
-/* ============================================================
-   موقعیت مکانی خروجی — پروکسی زندهٔ همان کشور، خودکار جایگذاری
-   ============================================================ */
-async function lmlApplyGeoLocation() {
-	var sel = $('fGeoLocation');
-	var cc = sel ? sel.value : '';
-	if (!cc) { toast('ابتدا یک کشور انتخاب کنید.', 'warn'); return; }
-	var b = $('btnApplyGeo');
-	if (b) { b.disabled = true; b.textContent = 'در حال یافتن پروکسی زنده...'; }
-	toast('⏳ در حال تست زندهٔ پروکسی‌های ' + cc + ' از منابع جهانی (چند ثانیه)...', 'info');
-	try {
-		var res = await api('/api/geo-pool?cc=' + encodeURIComponent(cc));
-		var d = await res.json().catch(function () { return {}; });
-		var list = (d && Array.isArray(d.proxies)) ? d.proxies : [];
-		if (!list.length) {
-			toast('❌ فعلاً پروکسی زنده‌ای برای این کشور پیدا نشد — کشور دیگر یا «مخزن ساکس پروکسی» را امتحان کنید.', 'err', 9000);
-			return;
-		}
-		var picks = list.slice(0, 3).map(function (p) { return 'socks5://' + p.hp; });
-		State.proxyFields = picks.slice();
-		State.activeProxyIndex = 0;
-		renderProxyFieldsUI();
-		var pm = $('fProxyMode');
-		if (pm && !pm.checked) { pm.checked = true; try { toggleUserProxyMode(true); } catch (e2) { } }
-		var ar = $('fAutoRotateProxy');
-		if (ar && !ar.checked) { ar.checked = true; }
-		toast('✅ ' + picks.length + ' پروکسی زندهٔ ' + ((d.flag || '') + ' ' + cc) + ' جایگذاری شد — خروجی کانفیگ‌ها همین کشور است. کاربر را ذخیره کنید.', 'ok', 9000);
-	} catch (e) {
-		toast('❌ خطا در دریافت پروکسی: ' + (e && e.message ? e.message : e), 'err');
-	} finally {
-		var b2 = $('btnApplyGeo');
-		if (b2) { b2.disabled = false; b2.textContent = 'وصل کن به این کشور'; }
-	}
-}
-on($('btnApplyGeo'), 'click', lmlApplyGeoLocation);
-window.lmlApplyGeoLocation = lmlApplyGeoLocation;
 
 /* ---- موتورهای اتصال (پریست فرگمنت) ---- */
 document.addEventListener('click', function (e) {
