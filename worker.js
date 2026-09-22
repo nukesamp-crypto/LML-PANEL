@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.0";
+const LML_PANEL_VERSION = "1.0.1";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -10516,7 +10516,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.0';
+var CURRENT_VERSION = '1.0.1';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
