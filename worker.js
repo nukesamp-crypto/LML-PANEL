@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1";
+const LML_PANEL_VERSION = "1.0.2";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -4249,11 +4249,11 @@ rules:
 		});
 	},
 
-	/* JSON کانفیگ با فرمت استاندارد v2ray/Xray — مخصوص Custom Config در v2rayNG */
+	/* JSON کانفیگ دقیقاً با ساختار قالب استاندارد v2rayNG (Custom Config) */
 	async generateV2rayJson(user, host) {
 		const uuid = user.uuid;
 		const path = "/stream/LML_PANEL/" + ((uuid || "").split("-")[4] || "default");
-		const outbounds = [];
+		const chainOuts = [];
 		let chainTag = null;
 		try {
 			let plist = [];
@@ -4263,61 +4263,96 @@ rules:
 			plist.slice(0, 3).forEach(function (pstr, pi) {
 				const m = /^(socks5|socks4|http|https):\/\/(?:([^@\/]+)@)?([^:\/]+):(\d{2,5})/i.exec(String(pstr).trim());
 				if (!m) return;
-				const tag = "LOC-" + (pi + 1);
+				const tag = "socks-chain-" + (pi + 1);
 				const server = { address: m[3], port: Number(m[4]) };
 				if (m[2]) {
 					const cred = m[2].split(":");
 					server.users = [{ user: decodeURIComponent(cred[0]), pass: decodeURIComponent(cred.slice(1).join(":")) }];
 				}
-				outbounds.push({ protocol: (m[1].toLowerCase().indexOf("socks") === 0 ? "socks" : "http"), tag: tag, settings: { servers: [server] } });
+				chainOuts.push({ tag: tag, protocol: (m[1].toLowerCase().indexOf("socks") === 0 ? "socks" : "http"), settings: { servers: [server] } });
 				if (!chainTag) chainTag = tag;
 			});
 		} catch (e) { }
 		const fragLen = String(user.frag_len || "").trim();
 		const fragInt = String(user.frag_int || "").trim();
-		const tlsSettings = {
-			serverName: host,
-			insecure: false,
-			fingerprint: String(user.fingerprint || "chrome"),
-			alpn: ["http/1.1"]
-		};
+		const tlsSettings = { serverName: host, fingerprint: String(user.fingerprint || "chrome") };
 		if (fragLen && fragInt) tlsSettings.fragment = { packets: "tlshello", length: fragLen, interval: fragInt };
 		const mainOut = {
+			tag: "proxy",
 			protocol: "vless",
-			tag: "LML",
-			settings: { vnext: [{ address: host, port: 443, users: [{ id: uuid, encryption: "none" }] }] },
+			settings: {
+				vnext: [{
+					address: host,
+					port: 443,
+					users: [{ id: uuid, email: "t@t.tt", security: "auto", encryption: "none" }]
+				}]
+			},
 			streamSettings: {
 				network: "ws",
 				security: "tls",
 				tlsSettings: tlsSettings,
-				wsSettings: { path: path + "?ed=2560", headers: { Host: host }, maxEarlyData: 2560, earlyDataHeaderName: "Sec-WebSocket-Protocol" }
-			}
+				wsSettings: { path: path, host: host }
+			},
+			mux: { enabled: false, concurrency: -1 }
 		};
 		if (chainTag) mainOut.proxySettings = { tag: chainTag };
-		outbounds.unshift(mainOut);
-		outbounds.push({ protocol: "freedom", tag: "direct" });
-		outbounds.push({ protocol: "blackhole", tag: "block", settings: { response: { type: "http" } } });
-		const rules = [];
+		const outbounds = [mainOut].concat(chainOuts).concat([
+			{ tag: "direct", protocol: "freedom" },
+			{ tag: "block", protocol: "blackhole" }
+		]);
+		const dnsHosts = {
+			"dns.google": ["8.8.8.8", "8.8.4.4", "2001:4860:4860::8888", "2001:4860:4860::8844"],
+			"dns.alidns.com": ["223.5.5.5", "223.6.6.6", "2400:3200::1", "2400:3200:baba::1"],
+			"one.one.one.one": ["1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"],
+			"1dot1dot1dot1.cloudflare-dns.com": ["1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"],
+			"cloudflare-dns.com": ["104.16.249.249", "104.16.248.249", "2606:4700::6810:f8f9", "2606:4700::6810:f9f9"],
+			"dns.cloudflare.com": ["162.159.61.8", "172.64.41.8", "2a06:98c1:52::8", "2803:f800:53::8"],
+			"dot.pub": ["1.12.12.12", "120.53.53.53"],
+			"doh.pub": ["1.12.12.12", "120.53.53.53"],
+			"dns.quad9.net": ["9.9.9.9", "149.112.112.112", "2620:fe::fe", "2620:fe::9"],
+			"dns.yandex.net": ["77.88.8.8", "77.88.8.1", "2a02:6b8::feed:0ff", "2a02:6b8:0:1::feed:0ff"],
+			"dns.sb": ["45.11.45.11", "185.222.222.222", "2a09::", "2a11::"],
+			"dns.umbrella.com": ["208.67.220.220", "208.67.222.222", "2620:119:35::35", "2620:119:53::53"],
+			"dns.sse.cisco.com": ["208.67.220.220", "208.67.222.222", "2620:119:35::35", "2620:119:53::53"],
+			"engage.cloudflareclient.com": ["162.159.192.1", "2606:4700:d0::a29f:c001"]
+		};
+		const rules = [
+			{ type: "field", port: "443", network: "udp", outboundTag: "block" }
+		];
 		if (user.block_ads) rules.push({ type: "field", domain: ["geosite:category-ads-all"], outboundTag: "block" });
 		if (user.block_porn) rules.push({ type: "field", domain: ["geosite:category-porn"], outboundTag: "block" });
-		rules.push({ type: "field", ip: ["geoip:private"], outboundTag: "direct" });
-		rules.push({ type: "field", domain: ["geosite:ir"], outboundTag: "direct" });
-		rules.push({ type: "field", ip: ["geoip:ir"], outboundTag: "direct" });
+		rules.push({ type: "field", outboundTag: "proxy", domain: ["geosite:google"] });
+		rules.push({ type: "field", outboundTag: "direct", ip: ["geoip:private"] });
+		rules.push({ type: "field", outboundTag: "direct", domain: ["geosite:private"] });
+		rules.push({ type: "field", outboundTag: "direct", ip: ["geoip:ir"] });
+		rules.push({ type: "field", outboundTag: "direct", domain: ["geosite:ir", "domain:.ir", "domain:alidns.com", "domain:doh.pub", "domain:dot.pub"] });
+		rules.push({ type: "field", inboundTag: ["direct-dns-1", "direct-dns-2"], outboundTag: "direct" });
+		rules.push({ type: "field", inboundTag: ["dns-module"], outboundTag: "proxy" });
 		const config = {
 			log: { loglevel: "warning" },
 			dns: {
+				hosts: dnsHosts,
 				servers: [
-					{ address: "https://8.8.8.8/dns-query", domains: ["geosite:non-ir"] },
-					{ address: "local", domains: ["geosite:ir", "geosite:private"] }
+					{ address: "local", domains: ["geosite:ir", "domain:.ir"], skipFallback: true, tag: "direct-dns-1" },
+					{ address: "https://cloudflare-dns.com/dns-query", domains: ["geosite:google"], skipFallback: true },
+					{ address: "local", domains: ["geosite:private"], skipFallback: true, tag: "direct-dns-2" },
+					{ address: "https://cloudflare-dns.com/dns-query", domains: ["full:cloudflare-dns.com"], skipFallback: true },
+					"https://cloudflare-dns.com/dns-query"
 				],
-				queryStrategy: "UseIPv4"
+				tag: "dns-module"
 			},
 			inbounds: [
-				{ tag: "socks-in", port: 10808, listen: "127.0.0.1", protocol: "socks", settings: { auth: "noauth", udp: true }, sniffing: { enabled: true, destOverride: ["http", "tls"] } },
-				{ tag: "http-in", port: 10809, listen: "127.0.0.1", protocol: "http", sniffing: { enabled: true, destOverride: ["http", "tls"] } }
+				{
+					tag: "socks",
+					port: 10808,
+					listen: "127.0.0.1",
+					protocol: "mixed",
+					sniffing: { enabled: true, destOverride: ["http", "tls"], routeOnly: false },
+					settings: { auth: "noauth", udp: true, allowTransparent: false }
+				}
 			],
 			outbounds: outbounds,
-			routing: { domainStrategy: "IPIfNonMatch", rules: rules }
+			routing: { domainStrategy: "AsIs", rules: rules }
 		};
 		return new Response(JSON.stringify(config, null, 2), {
 			headers: {
@@ -10516,7 +10551,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1';
+var CURRENT_VERSION = '1.0.2';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
