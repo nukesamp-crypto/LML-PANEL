@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.0";
+const LML_PANEL_VERSION = "1.0.1";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -233,6 +233,11 @@ async function lmlProbeIpTls(ip, port, sniDomain, timeoutMs) {
 	let sock = null;
 	let hardTimer = null;
 	const fin = function (ok, reason) { return { ok: !!ok, ms: Date.now() - t0, reason: reason }; };
+	/* آی‌پی داخل رنج رسمی کلودفلر = لبهٔ کلودفلر ⇒ قبول قطعی و فوری.
+	   (ورکر کلودفلر اساساً نمی‌تواند به آی‌پی لبهٔ خودش TCP بزند — تست سوکت
+	   از داخل ورکر برای این آی‌پی‌ها همیشه شکست کاذب می‌دهد، پس از محاسبهٔ
+	   ریاضی رنج رسمی استفاده می‌کنیم؛ همان روش استاندارد.) */
+	try { if (lmlIpInCf(String(ip))) return fin(true, "آی‌پی لبهٔ کلودفلر (رنج رسمی) ✓ — کانفیگ TLS با آن ساخته می‌شود"); } catch (e) { }
 	try {
 		sock = connect({ hostname: String(ip), port: Number(port) || 443 });
 		const hello = lmlBuildClientHello(sniDomain);
@@ -293,7 +298,11 @@ async function lmlLoadIpTestMem(env) {
 				for (const k in j) {
 					const e = j[k];
 					if (!e) continue;
-					if (Number(e.ok) === 0 && (now - (Number(e.at) || 0)) < 86400000) bad[k] = 1;
+					if (Number(e.ok) === 0 && (now - (Number(e.at) || 0)) < 86400000) {
+						let isCfK = false;
+						try { isCfK = lmlIpInCf(k); } catch (e2) { }
+						if (!isCfK) bad[k] = 1;
+					}
 					if (Number(e.ok) === 1 && e.cc) cc[k] = String(e.cc);
 				}
 			}
@@ -359,6 +368,7 @@ async function lmlAutoTestIps(ipsList, env, hostName) {
 	try {
 		const ips = lmlOnlyCfIps(ipsList, 40);
 		if (!ips.length) return;
+		try { await lmlCfRangesRefresh(); } catch (e) { }
 		const sniHost = await lmlPanelHostResolve(env, hostName);
 		const results = [];
 		const BATCH = 8;
@@ -2361,6 +2371,7 @@ const Router = {
 				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
 				const body = await readJsonBody(request);
 				const sniHost = await lmlPanelHostResolve(env, url.hostname);
+				try { await lmlCfRangesRefresh(); } catch (e) { }
 				const rawList = Array.isArray(body.ips) ? body.ips : String(body.ips || "").split(/[\s,]+/);
 				const portT = [443, 2053, 2083, 2087, 2096, 8443].indexOf(String(body.port)) >= 0 ? Number(body.port) : 443;
 				const ips = [];
@@ -10548,7 +10559,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.0';
+var CURRENT_VERSION = '1.0.1';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
