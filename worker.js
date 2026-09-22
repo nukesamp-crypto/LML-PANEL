@@ -1569,7 +1569,7 @@ const Router = {
 		return upgradeHeader === "websocket" && _LLM_TRAP.length > 0;
 	},
 	isSubscriptionPath(pathname) {
-		return pathname.startsWith("/sub/") || pathname.startsWith("/feed/") || pathname.startsWith("/s/") || pathname.startsWith("/singbox/") || pathname.startsWith("/status/");
+		return pathname.startsWith("/sub/") || pathname.startsWith("/feed/") || pathname.startsWith("/s/") || pathname.startsWith("/singbox/") || pathname.startsWith("/v2json/") || pathname.startsWith("/status/");
 	},
 	async handleWebSocket(request, env, ctx) {
 		try {
@@ -1588,6 +1588,8 @@ const Router = {
 			subUser = safeDecodeURI(url.pathname.slice(6));
 		} else if (url.pathname.startsWith("/singbox/")) {
 			subUser = safeDecodeURI(url.pathname.slice(9));
+		} else if (url.pathname.startsWith("/v2json/")) {
+			subUser = safeDecodeURI(url.pathname.slice(8));
 		} else if (url.pathname.startsWith("/status/")) {
 			subUser = safeDecodeURI(url.pathname.slice(8));
 		}
@@ -1605,7 +1607,7 @@ const Router = {
 			const accept = request ? (request.headers.get("Accept") || "") : "";
 			const ua = request ? (request.headers.get("User-Agent") || "").toLowerCase() : "";
 
-			const isBrowserPortal = url.pathname.startsWith("/s/") || (format !== "raw" && !url.pathname.startsWith("/singbox/") && !ua.includes("v2ray") && !ua.includes("clash") && !ua.includes("sing-box") && !ua.includes("hiddify") && (accept.includes("text/html") || accept.includes("*/*") || !ua));
+			const isBrowserPortal = url.pathname.startsWith("/s/") || (format !== "raw" && !url.pathname.startsWith("/singbox/") && !url.pathname.startsWith("/v2json/") && !ua.includes("v2ray") && !ua.includes("clash") && !ua.includes("sing-box") && !ua.includes("hiddify") && (accept.includes("text/html") || accept.includes("*/*") || !ua));
 			if (isBrowserPortal) {
 				return new Response(renderUserPortal(user, host, url), {
 					headers: { 
@@ -1616,6 +1618,9 @@ const Router = {
 			}
 			if (format === "clash" || ua.includes("clash")) {
 				return await SubscriptionService.generateClash(user, host);
+			}
+			if (url.pathname.startsWith("/v2json/") || format === "v2json") {
+				return await SubscriptionService.generateV2rayJson(user, host);
 			}
 			if (url.pathname.startsWith("/singbox/") || format === "singbox" || ua.includes("sing-box")) {
 				return await SubscriptionService.generateSingbox(user, host);
@@ -4244,6 +4249,84 @@ rules:
 		});
 	},
 
+	/* JSON کانفیگ با فرمت استاندارد v2ray/Xray — مخصوص Custom Config در v2rayNG */
+	async generateV2rayJson(user, host) {
+		const uuid = user.uuid;
+		const path = "/stream/LML_PANEL/" + ((uuid || "").split("-")[4] || "default");
+		const outbounds = [];
+		let chainTag = null;
+		try {
+			let plist = [];
+			if (user.user_socks5 && String(user.user_socks5).trim().startsWith("[")) plist = JSON.parse(user.user_socks5);
+			else if (user.user_socks5 || user.user_proxy_ip) plist = [user.user_socks5 || user.user_proxy_ip];
+			plist = (Array.isArray(plist) ? plist : []).map(function (p) { return (p && typeof p === "object") ? p.proxy : p; }).filter(function (p) { return p && String(p).trim(); });
+			plist.slice(0, 3).forEach(function (pstr, pi) {
+				const m = /^(socks5|socks4|http|https):\/\/(?:([^@\/]+)@)?([^:\/]+):(\d{2,5})/i.exec(String(pstr).trim());
+				if (!m) return;
+				const tag = "LOC-" + (pi + 1);
+				const server = { address: m[3], port: Number(m[4]) };
+				if (m[2]) {
+					const cred = m[2].split(":");
+					server.users = [{ user: decodeURIComponent(cred[0]), pass: decodeURIComponent(cred.slice(1).join(":")) }];
+				}
+				outbounds.push({ protocol: (m[1].toLowerCase().indexOf("socks") === 0 ? "socks" : "http"), tag: tag, settings: { servers: [server] } });
+				if (!chainTag) chainTag = tag;
+			});
+		} catch (e) { }
+		const fragLen = String(user.frag_len || "").trim();
+		const fragInt = String(user.frag_int || "").trim();
+		const tlsSettings = {
+			serverName: host,
+			insecure: false,
+			fingerprint: String(user.fingerprint || "chrome"),
+			alpn: ["http/1.1"]
+		};
+		if (fragLen && fragInt) tlsSettings.fragment = { packets: "tlshello", length: fragLen, interval: fragInt };
+		const mainOut = {
+			protocol: "vless",
+			tag: "LML",
+			settings: { vnext: [{ address: host, port: 443, users: [{ id: uuid, encryption: "none" }] }] },
+			streamSettings: {
+				network: "ws",
+				security: "tls",
+				tlsSettings: tlsSettings,
+				wsSettings: { path: path + "?ed=2560", headers: { Host: host }, maxEarlyData: 2560, earlyDataHeaderName: "Sec-WebSocket-Protocol" }
+			}
+		};
+		if (chainTag) mainOut.proxySettings = { tag: chainTag };
+		outbounds.unshift(mainOut);
+		outbounds.push({ protocol: "freedom", tag: "direct" });
+		outbounds.push({ protocol: "blackhole", tag: "block", settings: { response: { type: "http" } } });
+		const rules = [];
+		if (user.block_ads) rules.push({ type: "field", domain: ["geosite:category-ads-all"], outboundTag: "block" });
+		if (user.block_porn) rules.push({ type: "field", domain: ["geosite:category-porn"], outboundTag: "block" });
+		rules.push({ type: "field", ip: ["geoip:private"], outboundTag: "direct" });
+		rules.push({ type: "field", domain: ["geosite:ir"], outboundTag: "direct" });
+		rules.push({ type: "field", ip: ["geoip:ir"], outboundTag: "direct" });
+		const config = {
+			log: { loglevel: "warning" },
+			dns: {
+				servers: [
+					{ address: "https://8.8.8.8/dns-query", domains: ["geosite:non-ir"] },
+					{ address: "local", domains: ["geosite:ir", "geosite:private"] }
+				],
+				queryStrategy: "UseIPv4"
+			},
+			inbounds: [
+				{ tag: "socks-in", port: 10808, listen: "127.0.0.1", protocol: "socks", settings: { auth: "noauth", udp: true }, sniffing: { enabled: true, destOverride: ["http", "tls"] } },
+				{ tag: "http-in", port: 10809, listen: "127.0.0.1", protocol: "http", sniffing: { enabled: true, destOverride: ["http", "tls"] } }
+			],
+			outbounds: outbounds,
+			routing: { domainStrategy: "IPIfNonMatch", rules: rules }
+		};
+		return new Response(JSON.stringify(config, null, 2), {
+			headers: {
+				"Content-Type": "application/json; charset=utf-8",
+				"Content-Disposition": 'inline; filename="lml-v2ray.json"'
+			}
+		});
+	},
+
 	async generateSingbox(user, host) {
 		const uuid = user.uuid;
 		const path = "/stream/LML_PANEL/" + ((uuid || "").split("-")[4] || "default");
@@ -4519,7 +4602,10 @@ rules:
 					const ip = entry.addr;
 					const portStr = entry.port;
 					const isTlsPort = entry.tls;
-					const entryIpTag = entry.ip ? (" " + (ipCcGt[entry.ip] ? lmlFlagEmoji(ipCcGt[entry.ip]) + " " : "") + entry.ip) : " 🔒";
+					const isChainedGt = String(proxy.currentDynPath).indexOf("loc-") >= 0;
+					const chainFlagGt = (isChainedGt && proxy.flagEmoji && proxy.flagEmoji !== "🌐") ? (proxy.flagEmoji + " ") : "";
+					const ipPartGt = entry.ip ? ((ipCcGt[entry.ip] && !isChainedGt ? lmlFlagEmoji(ipCcGt[entry.ip]) + " " : "") + entry.ip + " ") : "";
+					const remarkBase = "LML | " + chainFlagGt + ipPartGt + user.username;
 					const tlsVal = isTlsPort ? "tls" : "none";
 					let userFrag = "";
 					if (user.frag_len && user.frag_int) userFrag += "&fragment=" + encodeURIComponent(user.frag_len + "," + user.frag_int + (isTlsPort ? ",tlshello" : ""));
@@ -4531,15 +4617,15 @@ rules:
 					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost + "&alpn=http%2F1.1") : "";
 
 					if (enableVless) {
-						const remark = "LML | " + lmlIpFlag + proxy.flagEmoji + entryIpTag + " | " + user.username;
+						const remark = remarkBase;
 						links.push("vl" + "e" + "ss://" + user.uuid + "@" + ip + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&encryption=none&host=" + host + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(remark));
 					}
 					if (enableTrojan) {
-						const trojanRemark = "LML | " + lmlIpFlag + proxy.flagEmoji + entryIpTag + " | " + user.username;
+						const trojanRemark = remarkBase;
 						links.push("trojan://" + user.uuid + "@" + ip + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&host=" + lmlHost + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(trojanRemark));
 					}
 					if (enableSS) {
-						const ssRemark = "LML | " + lmlIpFlag + proxy.flagEmoji + entryIpTag + " | " + user.username;
+						const ssRemark = remarkBase;
 						const methodPass = btoa("aes-256-gcm:" + user.uuid);
 						let pluginOpts = "v2ray-plugin;mode=websocket;host=" + lmlHost + ";path=" + decodeURIComponent(proxy.currentDynPath) + (isTlsPort ? ";tls" : "");
 						let pluginStr = encodeURIComponent(pluginOpts);
@@ -11605,10 +11691,12 @@ function lmlPanelOrigin() {
 function getSubLink(username) { return lmlPanelOrigin() + '/feed/' + encodeURIComponent(username); }
 function getSubTextLink(username) { return lmlPanelOrigin() + '/sub/' + encodeURIComponent(username); }
 function getSingboxLink(username) { return lmlPanelOrigin() + '/singbox/' + encodeURIComponent(username); }
+function getV2JsonLink(username) { return lmlPanelOrigin() + '/v2json/' + encodeURIComponent(username); }
 function getStatusLink(username) { return lmlPanelOrigin() + '/status/' + encodeURIComponent(username); }
 function getPortalLink(username) { return lmlPanelOrigin() + '/s/' + encodeURIComponent(username); }
 window.getSubLink = getSubLink;
 window.getSingboxLink = getSingboxLink;
+window.getV2JsonLink = getV2JsonLink;
 window.getStatusLink = getStatusLink;
 
 var LML_HTTP_TWIN = { '443': '80', '2053': '2052', '2083': '2082', '2087': '2086', '2096': '2095', '8443': '8080' };
@@ -11702,7 +11790,10 @@ function getvIeesLink(username) {
 				var insecureFlag = (isTlsPort && entry.ip) ? '1' : '0';
 				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host + '&alpn=http%2F1.1') : '';
 				var ipCcP = entry.ip ? ((State.ipCcMap || {})[entry.ip] || '') : '';
-				var remark = 'LML | ' + proxy.flagEmoji + (entry.ip ? (' ' + (ipCcP ? flagText(ipCcP) + ' ' : '') + entry.ip) : ' 🔒') + ' | ' + user.username;
+				var isChainedP = String(proxy.currentDynPath).indexOf('loc-') >= 0;
+				var chainFlagP = (isChainedP && proxy.flagEmoji && proxy.flagEmoji !== '🌐') ? (proxy.flagEmoji + ' ') : '';
+				var ipPartP = entry.ip ? ((ipCcP && !isChainedP ? flagText(ipCcP) + ' ' : '') + entry.ip + ' ') : '';
+				var remark = 'LML | ' + chainFlagP + ipPartP + user.username;
 				if (enableVless) {
 					links.push('vless://' + (user.uuid || '') + '@' + ip + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&encryption=none&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
 				}
@@ -11737,37 +11828,44 @@ function copyConfig(username) {
 }
 function copySubLink(enc) { var u = decodeURIComponent(enc); copyText(getSubLink(u), '✅ لینک سابسکریپشن کپی شد!'); }
 function copySingboxLink(enc) { var u = decodeURIComponent(enc); copyText(getSingboxLink(u), '✅ لینک Sing-box کپی شد!'); }
-/* گرفتن مستقیم JSON کانفیگ از پنل (کپی یا دانلود فایل) */
-async function copySingboxJson(username) {
+/* گرفتن مستقیم JSON کانفیگ از پنل — v2rayNG یا Sing-box (کپی/دانلود) */
+async function lmlFetchJsonConfig(url) {
+	var res = await fetch(url, { cache: 'no-store' });
+	if (!res.ok) throw new Error('HTTP ' + res.status);
+	var txt = await res.text();
+	if (!txt || txt.charAt(0) !== '{') throw new Error('سرور JSON برنگرداند');
+	return txt;
+}
+async function copyConfigJson(url, what) {
 	try {
-		toast('⏳ در حال دریافت JSON کانفیگ...', 'info');
-		var res = await fetch(getSingboxLink(username), { cache: 'no-store' });
-		if (!res.ok) throw new Error('HTTP ' + res.status);
-		var txt = await res.text();
-		if (!txt || txt.charAt(0) !== '{') throw new Error('سرور JSON برنگرداند');
-		lmlCopy(txt, '✅ JSON کانفیگ کپی شد!');
+		toast('⏳ در حال دریافت JSON (' + what + ')...', 'info');
+		var txt = await lmlFetchJsonConfig(url);
+		lmlCopy(txt, '✅ JSON مخصوص ' + what + ' کپی شد!');
 	} catch (e) {
 		toast('❌ دریافت JSON ناموفق: ' + (e && e.message ? e.message : e), 'err', 9000);
 	}
 }
-async function downloadSingboxJson(username) {
+async function downloadConfigJson(url, filename) {
 	try {
-		var res = await fetch(getSingboxLink(username), { cache: 'no-store' });
-		if (!res.ok) throw new Error('HTTP ' + res.status);
-		var txt = await res.text();
-		if (!txt || txt.charAt(0) !== '{') throw new Error('سرور JSON برنگرداند');
+		var txt = await lmlFetchJsonConfig(url);
 		var blob = new Blob([txt], { type: 'application/json' });
 		var a = document.createElement('a');
 		a.href = URL.createObjectURL(blob);
-		a.download = 'lml-' + username + '-singbox.json';
+		a.download = filename;
 		document.body.appendChild(a);
 		a.click();
 		setTimeout(function () { try { URL.revokeObjectURL(a.href); a.parentNode.removeChild(a); } catch (e2) { } }, 800);
-		toast('✅ فایل JSON دانلود شد: lml-' + username + '-singbox.json', 'ok');
+		toast('✅ فایل دانلود شد: ' + filename, 'ok');
 	} catch (e) {
 		toast('❌ دانلود JSON ناموفق: ' + (e && e.message ? e.message : e), 'err', 9000);
 	}
 }
+async function copyV2Json(username) { return copyConfigJson(getV2JsonLink(username), 'v2rayNG'); }
+async function downloadV2Json(username) { return downloadConfigJson(getV2JsonLink(username), 'lml-' + username + '-v2ray.json'); }
+async function copySingboxJson(username) { return copyConfigJson(getSingboxLink(username), 'Sing-box'); }
+async function downloadSingboxJson(username) { return downloadConfigJson(getSingboxLink(username), 'lml-' + username + '-singbox.json'); }
+window.copyV2Json = copyV2Json;
+window.downloadV2Json = downloadV2Json;
 window.copySingboxJson = copySingboxJson;
 window.downloadSingboxJson = downloadSingboxJson;
 function copyStatusLink(enc) { var u = decodeURIComponent(enc); copyText(getStatusLink(u), '✅ لینک وضعیت کپی شد!'); }
@@ -11920,8 +12018,10 @@ function userMenu(anchor, username) {
 		{ head: 'اشتراک' },
 		{ icon: 'copy', label: 'کپی لینک سابسکریپشن', action: function () { copySubLink(enc); } },
 		{ icon: 'link', label: 'کپی لینک Sing-box', action: function () { copySingboxLink(enc); } },
-		{ icon: 'copy', label: '📄 کپی JSON کانفیگ', action: function () { copySingboxJson(username); } },
-		{ icon: 'download', label: '⬇️ دانلود JSON کانفیگ', action: function () { downloadSingboxJson(username); } },
+		{ icon: 'copy', label: '📄 کپی JSON (مخصوص v2rayNG)', action: function () { copyV2Json(username); } },
+		{ icon: 'download', label: '⬇️ دانلود JSON (مخصوص v2rayNG)', action: function () { downloadV2Json(username); } },
+		{ icon: 'copy', label: '📄 کپی JSON (Sing-box / Husi)', action: function () { copySingboxJson(username); } },
+		{ icon: 'download', label: '⬇️ دانلود JSON (Sing-box / Husi)', action: function () { downloadSingboxJson(username); } },
 		{ icon: 'copy', label: 'کپی کانفیگ‌ها', action: function () { copyConfig(username); } },
 		{ icon: 'activity', label: 'کپی لینک وضعیت', action: function () { copyStatusLink(enc); } },
 		{ icon: 'qr', label: 'نمایش کد QR', action: function () { showSubQr(enc); } },
@@ -16653,6 +16753,9 @@ ${COMMON_TOAST_HTML}
 						const portStr = entry.port;
 						const isTlsPort = entry.tls;
 						const tlsVal = isTlsPort ? "tls" : "none";
+						const isChainedSt = String(proxy.currentDynPath).indexOf("loc-") >= 0;
+						const chainFlagSt = (isChainedSt && proxy.flagEmoji && proxy.flagEmoji !== "🌐") ? (proxy.flagEmoji + " ") : "";
+						const ipPartSt = entry.ip ? (entry.ip + " ") : "";
 						let userFrag = "";
 						if (u.frag_len && u.frag_int) userFrag += "&fragment=" + encodeURIComponent(u.frag_len + "," + u.frag_int + (isTlsPort ? ",tlshello" : ""));
 						if (u.advanced_frag) userFrag += "&fm=" + encodeURIComponent(u.advanced_frag);
@@ -16663,15 +16766,15 @@ ${COMMON_TOAST_HTML}
 						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host + "&alpn=http%2F1.1") : "";
 
 						if (enableVless) {
-							const remark = "LML | " + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " \ud83d\udd12") + " | " + u.username;
+							const remark = "LML | " + chainFlagSt + ipPartSt + u.username;
 							links.push('vle' + 'ss://' + (u.uuid || '') + '@' + ip + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&encryption=none&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
 						}
 						if (enableTrojan) {
-							const trojanRemark = "LML | " + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " \ud83d\udd12") + " | " + u.username;
+							const trojanRemark = "LML | " + chainFlagSt + ipPartSt + u.username;
 							links.push('trojan://' + (u.uuid || '') + '@' + ip + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(trojanRemark));
 						}
 						if (enableSS) {
-							const ssRemark = "LML | " + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " \ud83d\udd12") + " | " + u.username;
+							const ssRemark = "LML | " + chainFlagSt + ipPartSt + u.username;
 							const methodPass = btoa("aes-256-gcm:" + (u.uuid || ''));
 							let pluginOpts = "v2ray-plugin;mode=websocket;host=" + host + ";path=" + decodeURIComponent(proxy.currentDynPath) + (isTlsPort ? ";tls" : "");
 							let pluginStr = encodeURIComponent(pluginOpts);
