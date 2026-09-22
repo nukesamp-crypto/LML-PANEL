@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.0";
+const LML_PANEL_VERSION = "1.0.1";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -313,6 +313,138 @@ async function lmlLoadIpTestMem(env) {
 }
 async function lmlGetBadIps(env) { return (await lmlLoadIpTestMem(env)).bad || {}; }
 async function lmlGetIpCc(env) { return (await lmlLoadIpTestMem(env)).cc || {}; }
+
+/* ============================================================
+   ECH — پنهان‌سازی دامنه از DPI (فرمت سازگار v2rayNG/Husi)
+   لینک: &ech=<sni>+<doh> — کلاینت‌های قدیمی نادیده می‌گیرند
+   ============================================================ */
+let LML_ECH_MEM = { at: 0, val: null };
+async function lmlGetEchParam(env) {
+	try {
+		const now = Date.now();
+		if (LML_ECH_MEM.val !== null && (now - LML_ECH_MEM.at) < 300000) return LML_ECH_MEM.val;
+		let enabled = false;
+		try {
+			if (env && env.DB) {
+				const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'ech_enabled'").first();
+				enabled = !!(row && row.value === "1");
+			}
+		} catch (e) { }
+		LML_ECH_MEM = { at: now, val: enabled };
+		return enabled;
+	} catch (e) { return false; }
+}
+function lmlEchParam(host) {
+	try { return "&ech=" + encodeURIComponent(String(host) + "+" + "https://cloudflare-dns.com/dns-query"); } catch (e) { return ""; }
+}
+
+/* ============================================================
+   CROWD NETWORK — تست سلامت آی‌پی از نت واقعی کاربران
+   (استان/اپراتور از هدرهای خود کلودفلر؛ بدون دادهٔ شخصی)
+   ============================================================ */
+const CROWD_MEM = new Map();
+const CROWD_RL = new Map();
+let CROWD_LAST_FLUSH = 0;
+let CROWD_DB_CACHE = { at: 0, map: null };
+function lmlCrowdRegion(request) {
+	try {
+		const cf = (request && request.cf) ? request.cf : {};
+		const city = String(cf.city || cf.colo || "");
+		const asn = String(cf.asn || cf.asOrganization || "");
+		return (city + "/" + asn).slice(0, 60) || "/";
+	} catch (e) { return "/"; }
+}
+function lmlCrowdRecord(reports, region) {
+	const now = Date.now();
+	(Array.isArray(reports) ? reports : []).forEach(function (r) {
+		const ip = String((r && r.ip) || "");
+		if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return;
+		let m = CROWD_MEM.get(ip);
+		if (!m) { m = new Map(); CROWD_MEM.set(ip, m); }
+		let e = m.get(region);
+		if (!e) { e = { n: 0, ok: 0, msSum: 0, at: 0 }; m.set(region, e); }
+		e.n += 1;
+		if (r && r.ok) { e.ok += 1; e.msSum += Math.max(0, Number(r.ms) || 0); }
+		e.at = now;
+	});
+}
+async function lmlCrowdFlush(env) {
+	try {
+		if (!CROWD_MEM.size) return;
+		const snapshot = new Map(CROWD_MEM);
+		CROWD_MEM.clear();
+		let db = {};
+		try {
+			const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_crowd_scores'").first();
+			if (row && row.value) db = JSON.parse(row.value) || {};
+		} catch (e) { db = {}; }
+		const now = Date.now();
+		snapshot.forEach(function (regionMap, ip) {
+			if (!db[ip]) db[ip] = {};
+			regionMap.forEach(function (e, region) {
+				const cur = db[ip][region] || { n: 0, ok: 0, msSum: 0, at: 0 };
+				cur.n += e.n; cur.ok += e.ok; cur.msSum += e.msSum; cur.at = now;
+				db[ip][region] = cur;
+			});
+		});
+		for (const ip in db) {
+			for (const rg in db[ip]) {
+				if ((now - (db[ip][rg].at || 0)) > 1209600000) delete db[ip][rg];
+			}
+			const regs = Object.keys(db[ip]);
+			if (!regs.length) { delete db[ip]; continue; }
+			if (regs.length > 40) {
+				regs.sort(function (a, b) { return (db[ip][a].at || 0) - (db[ip][b].at || 0); });
+				regs.slice(0, regs.length - 40).forEach(function (rg) { delete db[ip][rg]; });
+			}
+		}
+		const ipsAll = Object.keys(db);
+		if (ipsAll.length > 120) {
+			const maxAt = function (ip) { let t = 0; for (const rg in db[ip]) t = Math.max(t, db[ip][rg].at || 0); return t; };
+			ipsAll.sort(function (a, b) { return maxAt(a) - maxAt(b); });
+			ipsAll.slice(0, ipsAll.length - 120).forEach(function (ip) { delete db[ip]; });
+		}
+		await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lml_crowd_scores', ?)").bind(JSON.stringify(db)).run();
+		CROWD_DB_CACHE = { at: 0, map: null };
+	} catch (e) { }
+}
+async function lmlCrowdLoad(env) {
+	const now = Date.now();
+	if (CROWD_DB_CACHE.map && (now - CROWD_DB_CACHE.at) < 600000) return CROWD_DB_CACHE.map;
+	let db = {};
+	try {
+		if (env && env.DB) {
+			const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_crowd_scores'").first();
+			if (row && row.value) db = JSON.parse(row.value) || {};
+		}
+	} catch (e) { db = {}; }
+	CROWD_DB_CACHE = { at: now, map: db };
+	return db;
+}
+function lmlCrowdSortForRegion(ips, region, db) {
+	try {
+		if (!region || !db || !Array.isArray(ips) || ips.length < 2) return ips;
+		const scored = ips.map(function (ip, i) {
+			const e = (db[ip] && db[ip][region]) ? db[ip][region] : null;
+			let score = 0;
+			if (e && e.n >= 3) score = ((e.ok / e.n) >= 0.5) ? 2 : -2;
+			else if (e && e.n > 0) score = ((e.ok / e.n) >= 0.5) ? 1 : -1;
+			return { ip: ip, score: score, i: i };
+		});
+		scored.sort(function (a, b) { return (b.score - a.score) || (a.i - b.i); });
+		return scored.map(function (x) { return x.ip; });
+	} catch (e) { return ips; }
+}
+function lmlCrowdSummary(db, ip) {
+	try {
+		const regs = (db && db[ip]) ? db[ip] : null;
+		if (!regs) return null;
+		let n = 0, ok = 0, rc = 0;
+		for (const k in regs) { rc++; n += (regs[k].n || 0); ok += (regs[k].ok || 0); }
+		if (!n) return null;
+		return { pct: Math.round((ok / n) * 100), n: n, regions: rc };
+	} catch (e) { return null; }
+}
 /* کشور آی‌پی (برای پرچم) — best-effort، هرگز خطا نمی‌دهد */
 async function lmlGeoCountry(ip) {
 	try {
@@ -1337,6 +1469,7 @@ const SSCrypto = {
 	}
 };
 async function handleCronTrigger(env, ctx) {
+	try { if (CROWD_MEM.size) safeWaitUntil(ctx, lmlCrowdFlush(env)); } catch (e) { }
 	try {
 		// 1. Auto Resets & Auto Rotates
 		await checkAutoResets(env, ctx);
@@ -1635,7 +1768,7 @@ const Router = {
 			if (url.pathname.startsWith("/singbox/") || format === "singbox" || ua.includes("sing-box")) {
 				return await SubscriptionService.generateSingbox(user, host);
 			}
-			return await SubscriptionService.generateText(user, host, ctx, env, String((request.cf && request.cf.colo) || ""));
+			return await SubscriptionService.generateText(user, host, ctx, env, String((request.cf && request.cf.colo) || ""), lmlCrowdRegion(request));
 		} catch (err) {
 			return new Response("Error building config: " + err.message, { status: 500 });
 		}
@@ -1706,7 +1839,7 @@ const Router = {
 			if (!user) {
 				return new Response("User not found", { status: 404 });
 			}
-			const subResponse = await SubscriptionService.generateText(user, url.hostname, ctx, env, String((request.cf && request.cf.colo) || ""));
+			const subResponse = await SubscriptionService.generateText(user, url.hostname, ctx, env, String((request.cf && request.cf.colo) || ""), lmlCrowdRegion(request));
 			const subBase64 = await subResponse.text();
 			let plainLinks = "";
 			try {
@@ -1727,11 +1860,21 @@ const Router = {
 				if (mergedSt.length > 0) {
 					const badIpsSt = await lmlGetBadIps(env);
 					badListSt = mergedSt.filter(function (ip) { return !!badIpsSt[ip] && !lmlIpInCf(ip); });
-					user.ips = mergedSt.join("\n");
+					let sortedSt = mergedSt;
+					try { sortedSt = lmlCrowdSortForRegion(mergedSt, lmlCrowdRegion(request), await lmlCrowdLoad(env)); } catch (e) { }
+					user.ips = sortedSt.join("\n");
 				}
 			}
 			const userIpsMap = GLOBAL_ACTIVE_IPS.get(user.username);
 			const liveIpCount = userIpsMap ? userIpsMap.size : 0;
+			let echParamSt = "";
+			let crowdSampleSt = [];
+			try {
+				if (await lmlGetEchParam(env)) echParamSt = lmlEchParam(await lmlPanelHostResolve(env, url.hostname));
+				crowdSampleSt = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
+				for (let si = crowdSampleSt.length - 1; si > 0; si--) { const sj = Math.floor(Math.random() * (si + 1)); const stmp = crowdSampleSt[si]; crowdSampleSt[si] = crowdSampleSt[sj]; crowdSampleSt[sj] = stmp; }
+				crowdSampleSt = crowdSampleSt.slice(0, 6);
+			} catch (e) { }
 			const userJson = JSON.stringify({
 				username: user.username,
 				uuid: user.uuid,
@@ -1748,6 +1891,8 @@ const Router = {
 				port: user.port,
 				ips: user.ips,
 				ips_bad: badListSt,
+				ech_param: echParamSt,
+				crowd_ips: crowdSampleSt,
 				fingerprint: user.fingerprint || "chrome",
 				connection_type: user.connection_type || "vless",
 				user_proxy_iata: user.user_proxy_iata,
@@ -2398,6 +2543,27 @@ const Router = {
 				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
 			}
 		}
+		if (url.pathname === "/api/crowd-probe" && request.method === "POST") {
+			try {
+				const clientIp = String(request.headers.get("CF-Connecting-IP") || "anon");
+				const nowC = Date.now();
+				const lastC = CROWD_RL.get(clientIp) || 0;
+				if (nowC - lastC < 30000) return new Response(JSON.stringify({ ok: 0 }), { headers: { "Content-Type": "application/json" } });
+				CROWD_RL.set(clientIp, nowC);
+				if (CROWD_RL.size > 5000) CROWD_RL.clear();
+				const bodyC = await readJsonBody(request);
+				const reportsC = Array.isArray(bodyC && bodyC.reports) ? bodyC.reports.slice(0, 8) : [];
+				lmlCrowdRecord(reportsC, lmlCrowdRegion(request));
+				if (!CROWD_LAST_FLUSH) CROWD_LAST_FLUSH = nowC;
+				if (nowC - CROWD_LAST_FLUSH > 600000) {
+					CROWD_LAST_FLUSH = nowC;
+					safeWaitUntil(typeof ctx !== "undefined" && ctx ? ctx : null, lmlCrowdFlush(env));
+				}
+				return new Response(JSON.stringify({ ok: 1 }), { headers: { "Content-Type": "application/json" } });
+			} catch (e) {
+				return new Response(JSON.stringify({ ok: 0 }), { headers: { "Content-Type": "application/json" } });
+			}
+		}
 		if (url.pathname === "/api/ip-repo" && request.method === "GET") {
 			try {
 				const session = await DbService.getSession(request, env);
@@ -2407,7 +2573,13 @@ const Router = {
 				const globalIps = await lmlGetGlobalRepoIps();
 				let extSet = false;
 				try { const r2 = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ext_ip_source'").first(); extSet = !!(r2 && r2.value && String(r2.value).trim()); } catch (e) { }
-				return new Response(JSON.stringify({ success: true, repo: repoData.ips, groups: repoData.groups, global: globalIps, ext: extIps, ext_set: extSet }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+				let crowdSum = {};
+				try {
+					const crowdDbR = await lmlCrowdLoad(env);
+					const allR = repoData.ips.concat(globalIps, extIps);
+					allR.forEach(function (ipR) { const sR = lmlCrowdSummary(crowdDbR, ipR); if (sR && !crowdSum[ipR]) crowdSum[ipR] = sR; });
+				} catch (e) { }
+				return new Response(JSON.stringify({ success: true, repo: repoData.ips, groups: repoData.groups, global: globalIps, ext: extIps, ext_set: extSet, crowd: crowdSum }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 			} catch (e) {
 				return new Response(JSON.stringify({ success: false, repo: [], ext: [], ext_set: false }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
 			}
@@ -3657,6 +3829,8 @@ const Router = {
 
 						const badIpsApi = await lmlGetBadIps(env);
 						const ipCcApi = await lmlGetIpCc(env);
+						let echParamApi = "";
+						try { if (await lmlGetEchParam(env)) echParamApi = lmlEchParam(await lmlPanelHostResolve(env, url.hostname)); } catch (e) { }
 						const enrichedUsers = (results || []).map((user) => {
 							/* IP-FREE: آی‌پی‌های خود کاربر همیشه اول و ثابت است؛ چرخش فقط اضافه می‌کند */
 							const ownIpsList = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
@@ -3715,6 +3889,7 @@ const Router = {
 							JSON.stringify({
 								users: enrichedUsers,
 								ip_cc: ipCcApi,
+								ech_param: echParamApi,
 								serverTime: now,
 								cfRequestsToday: cfReqs.today,
 								cfRequestsTotal: cfReqs.total,
@@ -4454,7 +4629,7 @@ rules:
 		});
 	},
 
-	async generateText(user, host, ctx = null, env = null, coloHint = "") {
+	async generateText(user, host, ctx = null, env = null, coloHint = "", regionKey = "") {
 		const _AI_BLOCKER = atob("TE1MX1BBTkVMX0NPUkVfU1lTVEVNX1JFQURZ");
 		let ips = [host];
 		/* IP-FREE: آی‌پی‌های خود کاربر همیشه اول است؛ چرخش خودکار فقط «اضافه» می‌کند */
@@ -4474,6 +4649,8 @@ rules:
 		if (!ips.length) ips = [host];
 		/* ---- IP-FREE: آی‌پی‌های کاربر مستقیم در لینک TLS (با SNI=دامنه)؛ بدون بررسی رنج ---- */
 		const lmlHost = await lmlPanelHostResolve(env, host);
+		let echGt = "";
+		try { if (env && await lmlGetEchParam(env)) echGt = lmlEchParam(lmlHost); } catch (e) { }
 		let lmlCleanIps = [];
 		{
 			const wantCount = Math.max(1, Math.min(parseInt(user.ip_count, 10) || 20, 40));
@@ -4488,6 +4665,9 @@ rules:
 			const badIpsGt = await lmlGetBadIps(env);
 			lmlTlsIps = lmlCleanIps.filter(function (ip) { return !badIpsGt[ip] || lmlIpInCf(ip); });
 			ipCcGt = await lmlGetIpCc(env);
+			if (lmlTlsIps.length > 1 && regionKey) {
+				try { lmlTlsIps = lmlCrowdSortForRegion(lmlTlsIps, regionKey, await lmlCrowdLoad(env)); } catch (e) { }
+			}
 		}
 		const lmlIpFlag = coloHint ? (lmlFlagEmoji(lmlColoCountry(coloHint)) + " ") : "";
 		let ports = String(user.port || "443")
@@ -4657,7 +4837,7 @@ rules:
 					if (user.tls_mask) userFrag += "&mask=" + encodeURIComponent(user.tls_mask);
 						
 					const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
-					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost + "&alpn=http%2F1.1") : "";
+					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost + "&alpn=http%2F1.1" + echGt) : "";
 
 					if (enableVless) {
 						const remark = remarkBase;
@@ -9607,6 +9787,13 @@ const HTML_TEMPLATES = {
 								</div>
 								<div class="switch-row">
 									<div class="sr-text">
+										<div class="sr-t">🕶️ ECH — پنهان‌سازی دامنه از فیلترچی</div>
+										<div class="sr-d">SNI واقعی داخل handshake رمز می‌شود (Encrypted ClientHello). کلاینت‌های قدیمی خودکار به حالت عادی برمی‌گردند — چیزی خراب نمی‌شود.</div>
+									</div>
+									<label class="switch"><input type="checkbox" id="setEch"><i></i></label>
+								</div>
+								<div class="switch-row">
+									<div class="sr-text">
 										<div class="sr-t">حالت سیاه‌وسفید</div>
 										<div class="sr-d">حذف رنگ‌ها از کل رابط</div>
 									</div>
@@ -10559,7 +10746,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.0';
+var CURRENT_VERSION = '1.0.1';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -11474,6 +11661,7 @@ function renderUsersUI(data) {
 
 	State.allUsers = users;
 	State.ipCcMap = data.ip_cc || {};
+	State.echParam = data.ech_param || '';
 	State.ipBadList = [];
 	try {
 		users.forEach(function (u) {
@@ -11830,7 +12018,7 @@ function getvIeesLink(username) {
 				if (isTlsPort && user.cipher_suites) userFrag += '&cs=' + encodeURIComponent(user.cipher_suites);
 				if (user.tls_mask) userFrag += '&mask=' + encodeURIComponent(user.tls_mask);
 				var insecureFlag = (isTlsPort && entry.ip) ? '1' : '0';
-				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host + '&alpn=http%2F1.1') : '';
+				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host + '&alpn=http%2F1.1' + (State.echParam || '')) : '';
 				var ipCcP = entry.ip ? ((State.ipCcMap || {})[entry.ip] || '') : '';
 				var isChainedP = String(proxy.currentDynPath).indexOf('loc-') >= 0;
 				var chainFlagP = (isChainedP && proxy.flagEmoji && proxy.flagEmoji !== '🌐') ? (proxy.flagEmoji + ' ') : '';
@@ -12952,13 +13140,16 @@ async function lmlLoadGhRepo() {
 	var info = $('lmlGhRepoInfo'), box = $('lmlGhRepoList'), btn = $('btnGhRepoAdd');
 	if (!info || !box || !btn) return;
 	function repoRow(ip) {
-		return '<label style="display:flex;align-items:center;gap:8px;padding:3px 2px;cursor:pointer"><input type="checkbox" class="lml-gh-ip" value="' + attr(ip) + '" checked><span class="mono" dir="ltr">' + esc(ip) + '</span></label>';
+		var cw = crowdMap[ip];
+		return '<label style="display:flex;align-items:center;gap:8px;padding:3px 2px;cursor:pointer"><input type="checkbox" class="lml-gh-ip" value="' + attr(ip) + '" checked><span class="mono" dir="ltr">' + esc(ip) + '</span>' + (cw ? '<span style="font-size:10.5px;color:var(--text-3);margin-right:auto">📊 ' + cw.pct + '٪ سالم در ' + cw.regions + ' منطقه</span>' : '') + '</label>';
 	}
 	var total = 0;
+	var crowdMap = {};
 	try {
 		info.textContent = 'در حال دریافت مخزن LML...';
 		var res = await api('/api/ip-repo');
 		var d = await res.json().catch(function () { return {}; });
+		crowdMap = (d && d.crowd) || {};
 		var repo = (d && Array.isArray(d.repo)) ? d.repo : [];
 		var groups = (d && Array.isArray(d.groups)) ? d.groups : [];
 		var glob = (d && Array.isArray(d.global)) ? d.global : [];
@@ -14562,6 +14753,12 @@ on($('setGrayscale'), 'change', function () {
 	try { localStorage.setItem('grayscale-theme', this.checked ? 'true' : 'false'); } catch (e) { }
 });
 on($('setGfx'), 'change', function () { toggleGfx(this.checked); });
+on($('setEch'), 'change', function () {
+	var cbE = this;
+	api('/api/settings/bulk', { body: { settings: { ech_enabled: cbE.checked ? '1' : '0' } } })
+		.then(function () { toast(cbE.checked ? '✅ ECH فعال شد — کانفیگ‌های جدید با SNI رمزنگاری‌شده ساخته می‌شوند' : '✅ ECH غیرفعال شد', 'ok'); })
+		.catch(function () { toast('خطا در ذخیره تنظیمات', 'err'); cbE.checked = !cbE.checked; });
+});
 on($('btnSideSettingsGfx'), 'click', function () {
 	applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
 });
@@ -14673,6 +14870,7 @@ async function loadSettings() {
 	$('setDensity').value = document.documentElement.getAttribute('data-density') || 'comfortable';
 	$('setSidebar').value = document.documentElement.getAttribute('data-sidebar') || 'expanded';
 	$('setGfx').checked = !document.documentElement.classList.contains('gfx-off');
+	try { $('setEch').checked = State.settings.ech_enabled === '1'; } catch (e) { }
 	$('setGrayscale').checked = document.documentElement.classList.contains('grayscale-active');
 }
 on($('btnSettingsReload'), 'click', function () { loadSettings(); toast('✅ تنظیمات مجدداً بارگذاری شد', 'ok'); });
@@ -14693,6 +14891,7 @@ async function saveAllSettings() {
 	var payload = {};
 	payload.auto_update = $('setAutoUpdate').checked ? '1' : '0';
 	payload.gfx_enabled = $('setGfx').checked ? '1' : '0';
+	try { payload.ech_enabled = $('setEch').checked ? '1' : '0'; } catch (e) { }
 	var tgT = $('setTgToken').value.trim();
 	var tgA = $('setTgAdmin').value.trim();
 	if (tgT) payload.tg_bot_token = tgT;
@@ -16801,7 +17000,7 @@ ${COMMON_TOAST_HTML}
 						if (u.tls_mask) userFrag += "&mask=" + encodeURIComponent(u.tls_mask);
 						
 						const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
-						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host + "&alpn=http%2F1.1") : "";
+						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host + "&alpn=http%2F1.1" + (u.ech_param || "")) : "";
 
 						if (enableVless) {
 							const remark = "LML | " + chainFlagSt + ipPartSt + u.username;
@@ -17140,6 +17339,48 @@ const flagContainer = document.getElementById('display-flag');
 		window.addEventListener('click', (e) => {
 			if (e.target.id === 'qr-modal') toggleQrModal(false);
 		});
+
+		/* ---- شبکه crowd: تست بی‌صدا و یک‌بار مصرف آی‌پی‌ها از نت خود کاربر ----
+		   نتیجه فقط به‌صورت تجمیعی در پنل مدیر دیده می‌شود؛ هیچ دادهٔ شخصی ذخیره نمی‌شود. */
+		(function () {
+			try {
+				var uC = window.statusUser || {};
+				var ipsC = Array.isArray(uC.crowd_ips) ? uC.crowd_ips.slice(0, 6) : [];
+				if (!ipsC.length) return;
+				var resultsC = [];
+				var idxC = 0;
+				function probeNextC() {
+					if (idxC >= ipsC.length) { sendReportsC(); return; }
+					var ipC = ipsC[idxC++];
+					var t0C = Date.now();
+					var doneC = false;
+					var timerC = setTimeout(function () { if (!doneC) { doneC = true; resultsC.push({ ip: ipC, ok: 0, ms: 2800 }); probeNextC(); } }, 2800);
+					function finishC() {
+						if (doneC) return;
+						doneC = true;
+						clearTimeout(timerC);
+						var msC = Date.now() - t0C;
+						resultsC.push({ ip: ipC, ok: (msC >= 60 && msC < 2600) ? 1 : 0, ms: msC });
+						setTimeout(probeNextC, 350);
+					}
+					try {
+						fetch('https://' + ipC + ':443/lml-crowd', { mode: 'no-cors', cache: 'no-store' }).then(finishC).catch(finishC);
+					} catch (eC) { finishC(); }
+				}
+				function sendReportsC() {
+					if (!resultsC.length) return;
+					try {
+						fetch('/api/crowd-probe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reports: resultsC }) }).catch(function () { });
+					} catch (eC2) { }
+				}
+				function startProbesC() {
+					if (document.visibilityState !== 'visible') return;
+					setTimeout(probeNextC, 2500);
+				}
+				if (document.readyState === 'complete') startProbesC();
+				else window.addEventListener('load', startProbesC);
+			} catch (eC3) { }
+		})();
 	</script>
 	${COMMON_WAVES_SCRIPT}
 <script>
