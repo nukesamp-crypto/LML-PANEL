@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1";
+const LML_PANEL_VERSION = "1.0.0";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -1726,7 +1726,7 @@ const Router = {
 				}
 				if (mergedSt.length > 0) {
 					const badIpsSt = await lmlGetBadIps(env);
-					badListSt = mergedSt.filter(function (ip) { return !!badIpsSt[ip]; });
+					badListSt = mergedSt.filter(function (ip) { return !!badIpsSt[ip] && !lmlIpInCf(ip); });
 					user.ips = mergedSt.join("\n");
 				}
 			}
@@ -3673,7 +3673,7 @@ const Router = {
 								...user,
 								ips: finalIps,
 								ips_valid: lmlOnlyCfIps(mergedIps, 40),
-								ip_bad: mergedIps.filter(function (ip) { return !!badIpsApi[ip]; }),
+								ip_bad: mergedIps.filter(function (ip) { return !!badIpsApi[ip] && !lmlIpInCf(ip); }),
 								ip_ssl_checked: true,
 								used_gb: (user.used_gb || 0) + ((GLOBAL_TRAFFIC_CACHE.get(user.username) || 0) / (1024 * 1024 * 1024)),
 								used_req: (user.used_req || 0) + (USER_REQ_CACHE.get(user.username) || 0),
@@ -4486,7 +4486,7 @@ rules:
 		let lmlTlsIps = lmlCleanIps.slice();
 		if (lmlCleanIps.length && env) {
 			const badIpsGt = await lmlGetBadIps(env);
-			lmlTlsIps = lmlCleanIps.filter(function (ip) { return !badIpsGt[ip]; });
+			lmlTlsIps = lmlCleanIps.filter(function (ip) { return !badIpsGt[ip] || lmlIpInCf(ip); });
 			ipCcGt = await lmlGetIpCc(env);
 		}
 		const lmlIpFlag = coloHint ? (lmlFlagEmoji(lmlColoCountry(coloHint)) + " ") : "";
@@ -10559,7 +10559,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1';
+var CURRENT_VERSION = '1.0.0';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
