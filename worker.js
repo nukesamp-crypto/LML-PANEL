@@ -609,6 +609,56 @@ async function lmlGetSocksRepo(force) {
 		return { success: false, proxies: (LML_SOCKS_MEM.alive || []) };
 	}
 }
+/* ============ موقعیت مکانی خروجی — استخر ساکس زنده به تفکیک کشور ============ */
+let LML_GEO_POOL_MEM = { at: 0, map: null };
+async function lmlLoadGeoPool(env) {
+	const now = Date.now();
+	if (LML_GEO_POOL_MEM.map && (now - LML_GEO_POOL_MEM.at) < 1200000) return LML_GEO_POOL_MEM.map;
+	let map = {};
+	try {
+		if (env && env.DB) {
+			const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_geo_pool'").first();
+			if (row && row.value) map = JSON.parse(row.value) || {};
+		}
+	} catch (e) { }
+	LML_GEO_POOL_MEM = { at: now, map: map };
+	return map;
+}
+async function lmlGetCountrySocks(env, cc, force) {
+	try {
+		const now = Date.now();
+		let map = await lmlLoadGeoPool(env);
+		const ent = map[cc];
+		if (!force && ent && Array.isArray(ent.list) && ent.list.length && (now - (ent.at || 0)) < 1200000) return ent.list;
+		let cands = (LML_SOCKS_MEM.list && LML_SOCKS_MEM.list.length) ? LML_SOCKS_MEM.list.slice() : [];
+		if (!cands.length) {
+			const seen = {};
+			for (const srcUrl of LML_SOCKS_SOURCES) {
+				const txt = await lmlFetchUrlText(srcUrl, 6000);
+				const found = String(txt).split(/\r?\n/).map(function (x) { return x.trim(); }).filter(function (x) { return /^\d{1,3}(\.\d{1,3}){3}:\d{2,5}$/.test(x); });
+				for (const f of found) { if (!seen[f] && cands.length < 300) { seen[f] = 1; cands.push(f); } }
+			}
+			LML_SOCKS_MEM = { at: now, srcAt: now, list: cands, alive: LML_SOCKS_MEM.alive };
+		}
+		const shuffled = cands.slice();
+		for (let s = shuffled.length - 1; s > 0; s--) { const j = Math.floor(Math.random() * (s + 1)); const t = shuffled[s]; shuffled[s] = shuffled[j]; shuffled[j] = t; }
+		const probeSlice = shuffled.slice(0, 150);
+		const ccMap = await lmlGeoBatch(probeSlice.map(function (hp) { return hp.split(":")[0]; }));
+		const inCountry = probeSlice.filter(function (hp) { return ccMap[hp.split(":")[0]] === cc; }).slice(0, 12);
+		const alive = [];
+		for (let i = 0; i < inCountry.length && alive.length < 6; i += 6) {
+			const rs = await Promise.all(inCountry.slice(i, i + 6).map(function (hp) { return lmlSocksAlive(hp, 1800); }));
+			rs.forEach(function (r) { if (r && alive.length < 6) alive.push(r); });
+		}
+		alive.sort(function (a, b) { return a.ms - b.ms; });
+		map = await lmlLoadGeoPool(env);
+		if (alive.length) map[cc] = { at: Date.now(), list: alive };
+		else if (!ent) map[cc] = { at: Date.now() - 900000, list: [] };
+		try { await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lml_geo_pool', ?)").bind(JSON.stringify(map)).run(); } catch (e) { }
+		LML_GEO_POOL_MEM = { at: Date.now(), map: map };
+		return alive.length ? alive : ((ent && ent.list) || []);
+	} catch (e) { return []; }
+}
 
 /* دامنه‌ی واقعی پنل: هرگز آی‌پی نمی‌شود (منبع خطای SSL در مرورگر همین بود) */
 let LML_PANEL_HOST_CACHE = "";
@@ -2366,6 +2416,18 @@ const Router = {
 				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
 			}
 		}
+		if (url.pathname === "/api/geo-pool" && request.method === "GET") {
+			try {
+				const session = await DbService.getSession(request, env);
+				if (!session) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				const cc = String(url.searchParams.get("cc") || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
+				if (cc.length !== 2) return new Response(JSON.stringify({ error: "کد کشور نامعتبر است" }), { status: 400, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				const list = await lmlGetCountrySocks(env, cc, url.searchParams.get("force") === "1");
+				return new Response(JSON.stringify({ success: true, cc: cc, flag: lmlFlagEmoji(cc), proxies: list }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+			} catch (e) {
+				return new Response(JSON.stringify({ success: false, proxies: [] }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
+			}
+		}
 		if (url.pathname === "/api/socks-repo" && request.method === "GET") {
 			try {
 				const session = await DbService.getSession(request, env);
@@ -3152,6 +3214,7 @@ const Router = {
 				LML_EXT_IPS_MEM = { at: 0, url: "", ips: null };
 				LML_GLOBAL_IPS_MEM = { at: 0, ips: null };
 				LML_SOCKS_MEM = { at: 0, list: null, alive: null };
+				LML_GEO_POOL_MEM = { at: 0, map: null };
 				LML_IP_TEST_MEM = { at: 0, bad: null, cc: null };
 				cachedVipCountries = [];
 				lastVipCountriesFetch = 0;
@@ -4184,39 +4247,74 @@ rules:
 	async generateSingbox(user, host) {
 		const uuid = user.uuid;
 		const path = "/stream/LML_PANEL/" + ((uuid || "").split("-")[4] || "default");
+		/* زنجیرهٔ پروکسی کاربر (ساکس/http) — خروجی همان کشوری که مدیر چیده */
+		let socksOuts = [];
+		let detourTag = null;
+		try {
+			let plist = [];
+			if (user.user_socks5 && String(user.user_socks5).trim().startsWith("[")) plist = JSON.parse(user.user_socks5);
+			else if (user.user_socks5 || user.user_proxy_ip) plist = [user.user_socks5 || user.user_proxy_ip];
+			plist = (Array.isArray(plist) ? plist : []).map(function (p) { return (p && typeof p === "object") ? p.proxy : p; }).filter(function (p) { return p && String(p).trim(); });
+			plist.slice(0, 3).forEach(function (pstr, pi) {
+				const m = /^(socks5|socks4|http|https):\/\/(?:([^@/]+)@)?([^:/]+):(\d{2,5})/i.exec(String(pstr).trim());
+				if (!m) return;
+				const tag = "🌍 LOC-" + (pi + 1);
+				const o = { type: (m[1].toLowerCase().indexOf("socks") === 0 ? "socks" : "http"), tag: tag, server: m[3], server_port: Number(m[4]) };
+				if (m[1].toLowerCase() === "socks5") o.version = "5";
+				if (m[2]) { const cred = m[2].split(":"); o.username = decodeURIComponent(cred[0]); o.password = decodeURIComponent(cred.slice(1).join(":")); }
+				socksOuts.push(o);
+				if (!detourTag) detourTag = tag;
+			});
+		} catch (e) { }
+		const fragLen = String(user.frag_len || "200-3000").trim() || "200-3000";
+		const fragPackets = String(user.frag_int || "1-2").trim() || "1-2";
+		const vlessOut = {
+			"type": "vless",
+			"tag": "⚡ LML-OUTBOUND",
+			"server": host,
+			"server_port": 443,
+			"uuid": uuid,
+			"tls": {
+				"enabled": true,
+				"server_name": host,
+				"insecure": false,
+				"utls": { "enabled": true, "fingerprint": String(user.fingerprint || "chrome") },
+				"fragment": { "packets": fragPackets, "length": fragLen, "mode": "random" }
+			},
+			"transport": { "type": "ws", "path": path + "?ed=2560", "headers": { "Host": host }, "early_data_header_name": "Sec-WebSocket-Protocol" }
+		};
+		if (detourTag) vlessOut.detour = detourTag;
+		const routeRules = [];
+		if (user.block_ads) routeRules.push({ "geosite": ["category-ads-all"], "outbound": "block" });
+		if (user.block_porn) routeRules.push({ "geosite": ["category-porn"], "outbound": "block" });
+		routeRules.push({ "ip_is_private": true, "outbound": "direct" });
+		routeRules.push({ "geoip": ["ir"], "outbound": "direct" });
+		routeRules.push({ "geosite": ["ir"], "outbound": "direct" });
+		routeRules.push({ "final": "⚡ LML-OUTBOUND" });
 		const config = {
-			"log": { "level": "info" },
+			"log": { "level": "warn" },
+			"dns": {
+				"servers": [
+					{ "tag": "dns-remote", "address": "https://8.8.8.8/dns-query", "detour": (detourTag || "⚡ LML-OUTBOUND") },
+					{ "tag": "dns-local", "address": "local", "detour": "direct" }
+				],
+				"rules": [
+					{ "geosite": ["ir"], "server": "dns-local" }
+				],
+				"final": "dns-remote",
+				"strategy": "prefer_ipv4"
+			},
 			"inbounds": [
 				{ "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080 }
 			],
-			"outbounds": [
-				{
-					"type": "vless",
-					"tag": "⚡ LML-OUTBOUND",
-					"server": host,
-					"server_port": 443,
-					"uuid": uuid,
-					"tls": {
-						"enabled": true,
-						"server_name": host,
-						"utls": { "enabled": true, "fingerprint": "chrome" },
-						"fragment": { "packets": "10-20", "length": "10-30", "mode": "random" }
-					},
-					"transport": {
-						"type": "ws",
-						"path": path,
-						"headers": { "Host": host }
-					}
-				},
+			"outbounds": [vlessOut].concat(socksOuts).concat([
 				{ "type": "direct", "tag": "direct" },
-				{ "type": "block", "tag": "block" }
-			],
+				{ "type": "block", "tag": "block" },
+				{ "type": "dns", "tag": "dns-out" }
+			]),
 			"route": {
-				"rules": [
-					{ "geoip": ["ir"], "outbound": "direct" },
-					{ "geosite": ["ir"], "outbound": "direct" },
-					{ "outbound": "⚡ LML-OUTBOUND" }
-				]
+				"auto_detect_interface": true,
+				"rules": [{ "protocol": "dns", "outbound": "dns-out" }].concat(routeRules)
 			}
 		};
 		return new Response(JSON.stringify(config, null, 2), {
@@ -4398,7 +4496,7 @@ rules:
 					flagEmoji = String.fromCodePoint(...codePoints);
 				} catch (e) { }
 			}
-			const currentDynPath = encodeURIComponent(rawPath + (proxyItem !== null && proxyItem !== "" ? `/loc-${locIdx}` : ""));
+			const currentDynPath = encodeURIComponent(rawPath + (proxyItem !== null && proxyItem !== "" ? `/loc-${locIdx}` : "") + "?ed=2560");
 			resolvedProxies.push({ flagEmoji, currentDynPath });
 		}
 		const connType = String(user.connection_type || "vless").toLowerCase();
@@ -4430,7 +4528,7 @@ rules:
 					if (user.tls_mask) userFrag += "&mask=" + encodeURIComponent(user.tls_mask);
 						
 					const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
-					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost) : "";
+					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost + "&alpn=http%2F1.1") : "";
 
 					if (enableVless) {
 						const remark = "LML | " + lmlIpFlag + proxy.flagEmoji + entryIpTag + " | " + user.username;
@@ -7453,6 +7551,13 @@ const HTML_TEMPLATES = {
 
 	html.grayscale-active { filter: grayscale(100%); }
 
+	/* یکدست‌سازی اندازه متن‌های تنظیمات */
+	#view-settings .ah-t { font-size: var(--fs-md); font-weight: 800; }
+	#view-settings .ah-d { font-size: var(--fs-xs); color: var(--text-3); font-weight: 500; }
+	#view-settings .hint { font-size: var(--fs-xs); line-height: 1.9; }
+	#view-settings label { font-size: var(--fs-sm); }
+	#view-settings .kv .k, #view-settings .kv .v { font-size: var(--fs-sm); }
+
 	body {
 		margin: 0;
 		font-family: var(--font-sans);
@@ -8424,8 +8529,8 @@ const HTML_TEMPLATES = {
 	<symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></symbol>
 	<symbol id="i-heart" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></symbol>
 	<symbol id="i-megaphone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a1 1 0 0 0 1 1h2l4 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M14 8a5 5 0 0 1 0 8"/><path d="M17.5 5a9 9 0 0 1 0 14"/><path d="M7 14v4a2 2 0 0 0 4 0"/></symbol>
-	<symbol id="i-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.11.79-.25.79-.56v-2c-3.2.7-3.88-1.36-3.88-1.36-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.18-1.49 3.14-1.18 3.14-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5z"/></symbol>
-	<symbol id="i-telegram" viewBox="0 0 24 24" fill="currentColor"><path d="M21.94 4.3a1.5 1.5 0 0 0-1.62-.26L3.4 11.1c-.9.34-.89 1.5.02 1.83l4.2 1.53 1.63 5.02c.25.78 1.24.95 1.8.31l2.36-2.7 4.3 3.17c.7.52 1.72.16 1.95-.71l3.2-14.1c.18-.79-.33-1.56-1.12-1.75zM9.1 14.2l-.42 3.9-1.2-3.7 8.5-5.5-6.88 5.3z"/></symbol>
+	<symbol id="i-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></symbol>
+	<symbol id="i-telegram" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></symbol>
 	<symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></symbol>
 	<symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></symbol>
 	<symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></symbol>
@@ -9153,11 +9258,6 @@ const HTML_TEMPLATES = {
 								<div class="field">
 									<label for="setRefreshRate">نرخ بروزرسانی خودکار پنل</label>
 									<select class="select" id="setRefreshRate">
-										
-										
-										
-										
-										
 										<option value="60000">۱ دقیقه — کم‌مصرف (پیش‌فرض)</option>
 										<option value="300000">۵ دقیقه</option>
 										<option value="600000">۱۰ دقیقه</option>
@@ -9786,6 +9886,11 @@ const HTML_TEMPLATES = {
 								</div>
 								<label class="switch"><input type="checkbox" id="fFragToggle" onchange="toggleFragInputs(this.checked)"><i></i></label>
 							</div>
+							<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 2px">
+								<button type="button" class="btn btn-sm" data-eng="light">🪶 موتور سبک</button>
+								<button type="button" class="btn btn-sm" data-eng="medium">⚙️ موتور متوسط</button>
+								<button type="button" class="btn btn-sm btn-primary" data-eng="heavy">🚀 موتور سنگین (نت ایران)</button>
+							</div>
 							<div id="fragBox" class="hidden">
 								<div class="form-row">
 									<div class="field">
@@ -9856,6 +9961,33 @@ const HTML_TEMPLATES = {
 									<button type="button" class="btn" id="btnTestProxies"><svg><use href="#i-activity"/></svg>تست پروکسی‌ها</button>
 									<button type="button" class="btn btn-primary" id="btnPublicProxy"><svg><use href="#i-globe"/></svg>اسکن پروکسی عمومی</button>
 									<button type="button" class="btn" id="btnSocksRepo"><svg><use href="#i-bolt"/></svg>مخزن ساکس پروکسی (زنده)</button>
+								</div>
+								<div class="field" style="margin-top:14px">
+									<label for="fGeoLocation">🌍 موقعیت مکانی خروجی (بدون وارد کردن آی‌پی یا ساکس)</label>
+									<div class="input-group">
+										<select class="select" id="fGeoLocation">
+											<option value="">— بدون تغییر لوکیشن —</option>
+											<option value="DE">🇩🇪 آلمان</option>
+											<option value="NL">🇳🇱 هلند</option>
+											<option value="FR">🇫🇷 فرانسه</option>
+											<option value="GB">🇬🇧 انگلستان</option>
+											<option value="SE">🇸🇪 سوئد</option>
+											<option value="ES">🇪🇸 اسپانیا</option>
+											<option value="IT">🇮🇹 ایتالیا</option>
+											<option value="PL">🇵🇱 لهستان</option>
+											<option value="TR">🇹🇷 ترکیه</option>
+											<option value="RU">🇷🇺 روسیه</option>
+											<option value="UA">🇺🇦 اوکراین</option>
+											<option value="US">🇺🇸 آمریکا</option>
+											<option value="CA">🇨🇦 کانادا</option>
+											<option value="JP">🇯🇵 ژاپن</option>
+											<option value="SG">🇸🇬 سنگاپور</option>
+											<option value="IN">🇮🇳 هند</option>
+											<option value="AE">🇦🇪 امارات</option>
+										</select>
+										<button type="button" class="btn btn-primary" id="btnApplyGeo">وصل کن به این کشور</button>
+									</div>
+									<span class="hint">کشور را انتخاب و کلیک کنید — پنل به‌صورت <b>زنده</b> چند ساکس پروکسی سالم و تست‌شده از همان کشور پیدا کرده و خودکار در فیلدهای پروکسی بالا می‌گذارد (بدون اینکه خودتان آی‌پی یا ساکس وارد کنید). خروجی کانفیگ‌ها همان کشور می‌شود — مناسب ChatGPT و سرویس‌های خارجی. تعویض خودکار پروکسی خراب هم روشن می‌شود.</span>
 								</div>
 								<div class="switch-row" style="margin-top:12px">
 									<div class="sr-text">
@@ -11568,7 +11700,7 @@ function getvIeesLink(username) {
 		var proxyStr = (proxyItem && typeof proxyItem === 'object') ? proxyItem.proxy : proxyItem;
 		var cc = (proxyItem && typeof proxyItem === 'object') ? proxyItem.country : (user.user_proxy_iata || '');
 		if (!cc && proxyStr && proxyFlagCache[proxyStr]) cc = proxyFlagCache[proxyStr];
-		var currentDynPath = encodeURIComponent(rawPath + ((proxyItem !== null && proxyItem !== '') ? '/loc-' + li : ''));
+		var currentDynPath = encodeURIComponent(rawPath + ((proxyItem !== null && proxyItem !== '') ? '/loc-' + li : '') + '?ed=2560');
 		resolvedProxies.push({ flagEmoji: flagText(cc), currentDynPath: currentDynPath });
 	}
 	var userConnType = String(user.connection_type || 'vless').toLowerCase();
@@ -11595,7 +11727,7 @@ function getvIeesLink(username) {
 				if (isTlsPort && user.cipher_suites) userFrag += '&cs=' + encodeURIComponent(user.cipher_suites);
 				if (user.tls_mask) userFrag += '&mask=' + encodeURIComponent(user.tls_mask);
 				var insecureFlag = (isTlsPort && entry.ip) ? '1' : '0';
-				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host) : '';
+				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host + '&alpn=http%2F1.1') : '';
 				var ipCcP = entry.ip ? ((State.ipCcMap || {})[entry.ip] || '') : '';
 				var remark = 'LML | ' + proxy.flagEmoji + (entry.ip ? (' ' + (ipCcP ? flagText(ipCcP) + ' ' : '') + entry.ip) : ' 🔒') + ' | ' + user.username;
 				if (enableVless) {
@@ -12846,6 +12978,64 @@ on($('socksRepoList'), 'click', function (e) {
 	toast('✅ ' + val + ' به فیلد پروکسی اضافه شد — کاربر را ذخیره کنید.', 'ok');
 });
 window.lmlLoadSocksRepo = lmlLoadSocksRepo;
+
+/* ============================================================
+   موقعیت مکانی خروجی — پروکسی زندهٔ همان کشور، خودکار جایگذاری
+   ============================================================ */
+async function lmlApplyGeoLocation() {
+	var sel = $('fGeoLocation');
+	var cc = sel ? sel.value : '';
+	if (!cc) { toast('ابتدا یک کشور انتخاب کنید.', 'warn'); return; }
+	var b = $('btnApplyGeo');
+	if (b) { b.disabled = true; b.textContent = 'در حال یافتن پروکسی زنده...'; }
+	toast('⏳ در حال تست زندهٔ پروکسی‌های ' + cc + ' از منابع جهانی (چند ثانیه)...', 'info');
+	try {
+		var res = await api('/api/geo-pool?cc=' + encodeURIComponent(cc));
+		var d = await res.json().catch(function () { return {}; });
+		var list = (d && Array.isArray(d.proxies)) ? d.proxies : [];
+		if (!list.length) {
+			toast('❌ فعلاً پروکسی زنده‌ای برای این کشور پیدا نشد — کشور دیگر یا «مخزن ساکس پروکسی» را امتحان کنید.', 'err', 9000);
+			return;
+		}
+		var picks = list.slice(0, 3).map(function (p) { return 'socks5://' + p.hp; });
+		State.proxyFields = picks.slice();
+		State.activeProxyIndex = 0;
+		renderProxyFieldsUI();
+		var pm = $('fProxyMode');
+		if (pm && !pm.checked) { pm.checked = true; try { toggleUserProxyMode(true); } catch (e2) { } }
+		var ar = $('fAutoRotateProxy');
+		if (ar && !ar.checked) { ar.checked = true; }
+		toast('✅ ' + picks.length + ' پروکسی زندهٔ ' + ((d.flag || '') + ' ' + cc) + ' جایگذاری شد — خروجی کانفیگ‌ها همین کشور است. کاربر را ذخیره کنید.', 'ok', 9000);
+	} catch (e) {
+		toast('❌ خطا در دریافت پروکسی: ' + (e && e.message ? e.message : e), 'err');
+	} finally {
+		var b2 = $('btnApplyGeo');
+		if (b2) { b2.disabled = false; b2.textContent = 'وصل کن به این کشور'; }
+	}
+}
+on($('btnApplyGeo'), 'click', lmlApplyGeoLocation);
+window.lmlApplyGeoLocation = lmlApplyGeoLocation;
+
+/* ---- موتورهای اتصال (پریست فرگمنت) ---- */
+document.addEventListener('click', function (e) {
+	var t = e.target.closest ? e.target.closest('[data-eng]') : null;
+	if (!t) return;
+	var m = t.getAttribute('data-eng');
+	var tg = $('fFragToggle');
+	if (m === 'light') {
+		vset('fFragLen', ''); vset('fFragInt', '');
+		if (tg && tg.checked) tg.click();
+		toast('🪶 موتور سبک: بدون فرگمنت (برای نت‌های پایدار).', 'ok');
+	} else if (m === 'medium') {
+		vset('fFragLen', '200-3000'); vset('fFragInt', '1-2');
+		if (tg && !tg.checked) tg.click();
+		toast('⚙️ موتور متوسط فعال شد (پیش‌فرض).', 'ok');
+	} else {
+		vset('fFragLen', '100-300'); vset('fFragInt', '8-12');
+		if (tg && !tg.checked) tg.click();
+		toast('🚀 موتور سنگین فعال شد — پکت‌های ریز و پرتعداد، بهینه برای اینترنت فیلترشدهٔ ایران.', 'ok', 9000);
+	}
+});
 
 /* VIP proxy cache (used to highlight known-good proxy links) */
 async function initVipCache() {
@@ -16471,7 +16661,7 @@ ${COMMON_TOAST_HTML}
 				} else if (proxyStr && proxyFlagCache[proxyStr] && typeof getFlagEmojiText === 'function') {
 					flagEmoji = getFlagEmojiText(proxyFlagCache[proxyStr]);
 				}
-				const currentDynPath = encodeURIComponent(rawPath + ((proxyItem !== null && proxyItem !== "") ? "/loc-" + locIdx : ""));
+				const currentDynPath = encodeURIComponent(rawPath + ((proxyItem !== null && proxyItem !== "") ? "/loc-" + locIdx : "") + "?ed=2560");
 				resolvedProxies.push({ flagEmoji, currentDynPath });
 			}
 			const userConnType = String(u.connection_type || 'vless').toLowerCase();
@@ -16498,7 +16688,7 @@ ${COMMON_TOAST_HTML}
 						if (u.tls_mask) userFrag += "&mask=" + encodeURIComponent(u.tls_mask);
 						
 						const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
-						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host) : "";
+						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host + "&alpn=http%2F1.1") : "";
 
 						if (enableVless) {
 							const remark = "LML | " + proxy.flagEmoji + (entry.ip ? (" " + entry.ip) : " \ud83d\udd12") + " | " + u.username;
