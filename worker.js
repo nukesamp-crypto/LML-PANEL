@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.3";
+const LML_PANEL_VERSION = "1.0.0";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -4621,17 +4621,14 @@ rules:
 		const enableVless = connType.includes("vless") || connType === "vl" + "e" + "ss" || (!connType.includes("trojan") && !connType.includes("shadowsocks"));
 		const enableTrojan = connType.includes("trojan");
 		const enableSS = connType.includes("shadowsocks");
-		/* خانواده ۱: آی‌پی کاربر + TLS (SNI=دامنه، allowInsecure=1) ⇒ بدون خطای SSL/CCL */
+		/* خانواده ۱: آی‌پی تمیز کاربر + TLS (SNI=دامنه، allowInsecure=1) — فقط پورت‌های TLS که کاربر انتخاب کرده */
 		/* خانواده ۲: دامنه + TLS — گواهی همیشه معتبر */
-		/* خانواده ۳: آی‌پی + پورت HTTP بدون TLS — هیچ گواهی‌ای در کار نیست */
+		/* لینک پورت HTTP/بدونTLS ساخته نمی‌شود — فقط پورت‌های فعال کاربر */
 		const lmlEntries = [];
 		lmlTlsIps.forEach((ipClean) => {
 			ports.forEach((portStr) => { lmlEntries.push({ addr: ipClean, port: portStr, tls: true, ip: ipClean }); });
 		});
 		ports.forEach((portStr) => { lmlEntries.push({ addr: lmlHost, port: portStr, tls: true, ip: "" }); });
-		lmlCleanIps.forEach((ipClean) => {
-			ports.forEach((portStr) => { lmlEntries.push({ addr: ipClean, port: lmlHttpTwin(portStr), tls: false, ip: ipClean }); });
-		});
 		lmlEntries.forEach((entry) => {
 			resolvedProxies.forEach((proxy) => {
 					const ip = entry.addr;
@@ -9990,7 +9987,7 @@ const HTML_TEMPLATES = {
 									<button type="button" class="btn btn-sm" id="btnOpenLmlRepo"><svg><use href="#i-globe"/></svg>مخزن آی‌پی تمیز</button>
 								</div>
 								<div class="lml-ip-status" id="sslTestStatus" style="display:none"></div>
-								<div class="note" style="margin-top:8px"><svg><use href="#i-info"/></svg><div>هر نوع آی‌پی وارد کنید پذیرفته می‌شود — کلودفلر یا غیرکلودفلر (بدون هیچ بررسی رنج). آی‌پی کلودفلر کانفیگ TLS + بدونTLS می‌گیرد و آی‌پی غیرکلودفلر فقط بدونTLS (هرگز خطای SSL نمی‌دهد). 💡 پیشنهاد ویژه: برای اتصال پایدار و لوکیشن خارجی، از «مخزن ساکس پروکسی» در تب پروکسی خروجی استفاده کنید. برای اطمینان دکمهٔ <b>«تست آی‌پی تمیز»</b> را بزنید: ورکر با handshake واقعی TLS بررسی می‌کند که آی‌پی، لبه‌ی کلودفلر است و گواهی دامنهٔ شما را سرو می‌دهد. آی‌پی‌های مردود هم از این فیلد و هم از کانفیگ‌ها <b>خودکار حذف</b> می‌شوند ⇒ خطای SSL/CCL هرگز رخ نمی‌دهد. خانواده‌های لینک: <b>آی‌پی + TLS</b> (SNI=دامنه، allowInsecure=1)، <b>آی‌پی + بدون TLS</b> روی پورت HTTP، و <b>دامنه + TLS</b>.</div></div>
+								<div class="note" style="margin-top:8px"><svg><use href="#i-info"/></svg><div>کانفیگ‌ها <b>فقط روی پورت‌های TLS که تیک زده‌اید</b> ساخته می‌شوند (443، 2053 و…) — هیچ لینک پورت 80/بدونTLS ساخته نمی‌شود. دو خانواده لینک: <b>آی‌پی تمیز + TLS</b> (SNI=دامنه، allowInsecure=1 ⇒ بدون خطای SSL/CCL) و <b>دامنه + TLS</b>. آی‌پی باید لبه‌ی کلودفلر باشد تا کانفیگ بسازد؛ دکمهٔ <b>«تست آی‌پی تمیز»</b> با handshake واقعی بررسی و آی‌پی‌های غیرکلودفلر را خودکار حذف می‌کند. 💡 برای لوکیشن خارجی و اتصال پایدار: «مخزن ساکس پروکسی» در تب پروکسی خروجی.</div></div>
 							</div>
 							<div class="switch-row">
 								<div class="sr-text">
@@ -10551,7 +10548,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.3';
+var CURRENT_VERSION = '1.0.0';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -11810,7 +11807,6 @@ function getvIeesLink(username) {
 	var lmlEntries = [];
 	tlsIpsP.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
 	ips.forEach(function (h) { ports.forEach(function (p) { lmlEntries.push({ addr: h, port: p, tls: true, ip: '' }); }); });
-	cleanIps.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: LML_HTTP_TWIN[p] || '80', tls: false, ip: cip }); }); });
 	lmlEntries.forEach(function (entry) {
 			resolvedProxies.forEach(function (proxy) {
 				var ip = entry.addr;
@@ -14999,19 +14995,19 @@ async function lmlTestIpsNow(isAuto) {
 		if (!d || !Array.isArray(d.results)) throw new Error((d && d.error) || 'پاسخ نامعتبر از سرور');
 		var good = [], bad = [];
 		d.results.forEach(function (r) { if (r.ok) good.push(r.ip); else bad.push(r.ip); });
-		if ($('fIps')) $('fIps').value = uniq.join(String.fromCharCode(10));
+		if ($('fIps')) $('fIps').value = good.join(String.fromCharCode(10));
 		if (st) {
 			st.style.display = '';
 			st.textContent = '';
 			d.results.forEach(function (r) {
 				var div = document.createElement('div');
 				div.style.cssText = 'padding:2px 0;direction:rtl;text-align:right';
-				div.textContent = (r.ok ? '✅ ' : '⚠️ ') + (r.cc ? flagText(r.cc) + ' ' : '') + r.ip + ' — ' + r.reason + (r.ok ? '' : ' — نگه داشته شد؛ کانفیگ بدون TLS (بدون خطای SSL)') + (r.ms ? ' (' + r.ms + 'ms)' : '');
+				div.textContent = (r.ok ? '✅ ' : '⚠️ ') + (r.cc ? flagText(r.cc) + ' ' : '') + r.ip + ' — ' + r.reason + (r.ok ? '' : ' — حذف شد؛ آی‌پی غیرکلودفلر هرگز وصل نمی‌شود') + (r.ms ? ' (' + r.ms + 'ms)' : '');
 				st.appendChild(div);
 			});
 		}
-		if (good.length) toast('✅ ' + good.length + ' آی‌پی تمیز کلودفلر — کانفیگ کامل TLS + بدون TLS.', 'ok');
-		if (bad.length) toast('⚠️ ' + bad.length + ' آی‌پی غیرکلودفلر نگه داشته شد — فقط کانفیگ بدون TLS (هرگز خطای SSL نمی‌دهد). 💡 برای اتصال قطعی، ساکس پروکسی پیشنهاد می‌شود.', 'warn', 9000);
+		if (good.length) toast('✅ ' + good.length + ' آی‌پی تمیز کلودفلر تأیید شد — کانفیگ TLS فقط روی پورت‌های انتخابی.', 'ok');
+		if (bad.length) toast('❌ ' + bad.length + ' آی‌پی غیرکلودفلر بود و حذف شد — این‌ها هرگز وصل نمی‌شوند. 💡 برای لوکیشن خارجی، ساکس پروکسی پیشنهاد می‌شود.', 'err', 9000);
 	} catch (e) {
 		if (st) { st.style.display = ''; st.textContent = 'تست ناموفق: ' + (e && e.message ? e.message : e); }
 		toast('❌ تست آی‌پی ناموفق بود: ' + (e && e.message ? e.message : 'خطای ارتباط با سرور'), 'err', 9000);
@@ -16778,7 +16774,6 @@ ${COMMON_TOAST_HTML}
 			var lmlEntries = [];
 			tlsIpsSt2.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
 			ips.forEach(function (hh) { ports.forEach(function (p) { lmlEntries.push({ addr: hh, port: p, tls: true, ip: '' }); }); });
-			cleanIps.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: lmlHttpTwinPort(p), tls: false, ip: cip }); }); });
 			lmlEntries.forEach((entry) => {
 				resolvedProxies.forEach((proxy) => {
 						const ip = entry.addr;
