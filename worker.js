@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.2";
+const LML_PANEL_VERSION = "1.0.3";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -10551,7 +10551,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.2';
+var CURRENT_VERSION = '1.0.3';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -12053,10 +12053,7 @@ function userMenu(anchor, username) {
 		{ head: 'اشتراک' },
 		{ icon: 'copy', label: 'کپی لینک سابسکریپشن', action: function () { copySubLink(enc); } },
 		{ icon: 'link', label: 'کپی لینک Sing-box', action: function () { copySingboxLink(enc); } },
-		{ icon: 'copy', label: '📄 کپی JSON (مخصوص v2rayNG)', action: function () { copyV2Json(username); } },
-		{ icon: 'download', label: '⬇️ دانلود JSON (مخصوص v2rayNG)', action: function () { downloadV2Json(username); } },
-		{ icon: 'copy', label: '📄 کپی JSON (Sing-box / Husi)', action: function () { copySingboxJson(username); } },
-		{ icon: 'download', label: '⬇️ دانلود JSON (Sing-box / Husi)', action: function () { downloadSingboxJson(username); } },
+		{ icon: 'copy', label: '📄 JSON کانفیگ — به‌زودی', action: function () { toast('⏳ قابلیت JSON کانفیگ به‌زودی اضافه می‌شود.', 'info'); } },
 		{ icon: 'copy', label: 'کپی کانفیگ‌ها', action: function () { copyConfig(username); } },
 		{ icon: 'activity', label: 'کپی لینک وضعیت', action: function () { copyStatusLink(enc); } },
 		{ icon: 'qr', label: 'نمایش کد QR', action: function () { showSubQr(enc); } },
