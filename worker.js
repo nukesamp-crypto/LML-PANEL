@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1";
+const LML_PANEL_VERSION = "1.0.0";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -630,7 +630,7 @@ let LML_SOCKS_MEM = { at: 0, srcAt: 0, list: null, alive: null };
 async function lmlGetGlobalRepoIps() {
 	try {
 		const now = Date.now();
-		if (LML_GLOBAL_IPS_MEM.ips !== null && (now - LML_GLOBAL_IPS_MEM.at) < 60000) return LML_GLOBAL_IPS_MEM.ips;
+		if (LML_GLOBAL_IPS_MEM.ips !== null && (now - LML_GLOBAL_IPS_MEM.at) < 600000) return LML_GLOBAL_IPS_MEM.ips;
 		try { await lmlCfRangesRefresh(); } catch (e) { }
 		const out = [];
 		const seen = {};
@@ -1886,6 +1886,12 @@ const Router = {
 			{
 				const ownIpsSt = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
 				const mergedSt = ownIpsSt.slice();
+				if (!ownIpsSt.length) {
+					try {
+						const poolSt = await lmlGetGlobalRepoIps();
+						if (poolSt.length) lmlCrowdSortForRegion(poolSt.slice(), lmlCrowdRegion(request), await lmlCrowdLoad(env)).slice(0, 8).forEach(function (ipS) { if (mergedSt.indexOf(ipS) < 0) mergedSt.push(ipS); });
+					} catch (e) { }
+				}
 				if (user.auto_rotate_ip === 1) {
 					const cachedIpsData = await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null);
 					const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
@@ -2617,7 +2623,13 @@ const Router = {
 				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
 				const repoData = await lmlGetRepoIps();
 				const extIps = await lmlGetExtIps(env);
-				const globalIps = await lmlGetGlobalRepoIps();
+				let globalIps = await lmlGetGlobalRepoIps();
+				try {
+					const crowdDbG = await lmlCrowdLoad(env);
+					const scoredG = globalIps.map(function (ipG) { const sG = lmlCrowdSummary(crowdDbG, ipG); return { ip: ipG, sc: sG ? sG.pct : 51 }; });
+					scoredG.sort(function (aG, bG) { return bG.sc - aG.sc; });
+					globalIps = scoredG.map(function (xG) { return xG.ip; });
+				} catch (e) { }
 				let extSet = false;
 				try { const r2 = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_ext_ip_source'").first(); extSet = !!(r2 && r2.value && String(r2.value).trim()); } catch (e) { }
 				let crowdSum = {};
@@ -3874,6 +3886,8 @@ const Router = {
 						const now = Date.now();
 						const cachedIpsData = (results || []).some(u=>u.auto_rotate_ip===1) ? await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null) : {};
 
+						let globalPoolApi = [];
+						try { globalPoolApi = (await lmlGetGlobalRepoIps()).slice(0, 8); } catch (e) { }
 						const badIpsApi = await lmlGetBadIps(env);
 						const ipCcApi = await lmlGetIpCc(env);
 						let echParamApi = "";
@@ -3882,6 +3896,7 @@ const Router = {
 							/* IP-FREE: آی‌پی‌های خود کاربر همیشه اول و ثابت است؛ چرخش فقط اضافه می‌کند */
 							const ownIpsList = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
 							const mergedIps = ownIpsList.slice();
+							if (!ownIpsList.length) globalPoolApi.forEach(function (ipG) { if (mergedIps.indexOf(ipG) < 0) mergedIps.push(ipG); });
 							if (user.auto_rotate_ip === 1) {
 								const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
 								randomIps.forEach(function (ip) { if (mergedIps.indexOf(ip) < 0) mergedIps.push(ip); });
@@ -4688,6 +4703,13 @@ rules:
 				.filter((ip) => ip.length > 0);
 		}
 		if (parsedUserIps.length > 0) ips = parsedUserIps;
+		if (parsedUserIps.length === 0 && env) {
+			/* کاربر بدون آی‌پی: تغذیه از مخزن جهانی (دیتاسنترهای کلودفلر سراسر جهان) — اولویت با تأییدشده‌های crowd */
+			try {
+				const poolGt = await lmlGetGlobalRepoIps();
+				if (poolGt.length) ips = lmlCrowdSortForRegion(poolGt.slice(), regionKey, await lmlCrowdLoad(env)).slice(0, 8);
+			} catch (e) { }
+		}
 		if (user.auto_rotate_ip === 1) {
 			const cachedIpsData = await getCachedIps(typeof ctx !== "undefined" && ctx ? ctx : null);
 			const randomIps = getRandomIps(cachedIpsData, user.ip_operator || "all", user.ip_count || 20);
@@ -7909,12 +7931,22 @@ const HTML_TEMPLATES = {
 
 	html.grayscale-active { filter: grayscale(100%); }
 
-	/* یکدست‌سازی اندازه متن‌های تنظیمات */
-	#view-settings .ah-t { font-size: var(--fs-md); font-weight: 800; }
-	#view-settings .ah-d { font-size: var(--fs-xs); color: var(--text-3); font-weight: 500; }
-	#view-settings .hint { font-size: var(--fs-xs); line-height: 1.9; }
-	#view-settings label { font-size: var(--fs-sm); }
-	#view-settings .kv .k, #view-settings .kv .v { font-size: var(--fs-sm); }
+	/* ---- پنج تم جدید LML (همه بر پایهٔ طرح تیره — خوانایی کامل) ---- */
+	html[data-theme="midnight"] { --bg:#050a18; --bg-soft:#081020; --surface:#0b1428; --surface-2:#101b33; --surface-3:#16233f; --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.15); --text:#e8ecf7; --text-2:#b7c0d8; --text-3:#7d88a6; --text-4:#59627d; --accent:#3b82f6; --accent-soft:rgba(59,130,246,.15); --accent-text:#93b4ff; --ok:#34d399; --ok-soft:rgba(52,211,153,.13); --warn:#fbbf24; --warn-soft:rgba(251,191,36,.13); --err:#f87171; --err-soft:rgba(248,113,113,.13); --info:#38bdf8; --info-soft:rgba(56,189,248,.13); --violet:#a78bfa; --violet-soft:rgba(167,139,250,.13); --shadow-1:0 1px 2px rgba(0,0,0,.4); --shadow-2:0 4px 16px rgba(0,0,0,.4); --shadow-3:0 18px 50px rgba(0,0,0,.6); --glass:rgba(11,20,40,.72); --grid-line:rgba(255,255,255,.06); color-scheme:dark; }
+	html[data-theme="royal"] { --bg:#0a0614; --bg-soft:#100a1e; --surface:#150e28; --surface-2:#1c1334; --surface-3:#241a42; --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.15); --text:#ece8f7; --text-2:#c0b7d8; --text-3:#8b7da6; --text-4:#63597d; --accent:#a855f7; --accent-soft:rgba(168,85,247,.15); --accent-text:#d0a7ff; --ok:#34d399; --ok-soft:rgba(52,211,153,.13); --warn:#fbbf24; --warn-soft:rgba(251,191,36,.13); --err:#f87171; --err-soft:rgba(248,113,113,.13); --info:#38bdf8; --info-soft:rgba(56,189,248,.13); --violet:#c4b5fd; --violet-soft:rgba(196,181,253,.13); --shadow-1:0 1px 2px rgba(0,0,0,.4); --shadow-2:0 4px 16px rgba(0,0,0,.4); --shadow-3:0 18px 50px rgba(0,0,0,.6); --glass:rgba(21,14,40,.72); --grid-line:rgba(255,255,255,.06); color-scheme:dark; }
+	html[data-theme="forest"] { --bg:#050f0a; --bg-soft:#08150e; --surface:#0b1c12; --surface-2:#10251a; --surface-3:#163022; --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.15); --text:#e8f7ee; --text-2:#b7d8c4; --text-3:#7da68d; --text-4:#597d66; --accent:#22c55e; --accent-soft:rgba(34,197,94,.15); --accent-text:#97f7b4; --ok:#4ade80; --ok-soft:rgba(74,222,128,.13); --warn:#fbbf24; --warn-soft:rgba(251,191,36,.13); --err:#f87171; --err-soft:rgba(248,113,113,.13); --info:#38bdf8; --info-soft:rgba(56,189,248,.13); --violet:#a78bfa; --violet-soft:rgba(167,139,250,.13); --shadow-1:0 1px 2px rgba(0,0,0,.4); --shadow-2:0 4px 16px rgba(0,0,0,.4); --shadow-3:0 18px 50px rgba(0,0,0,.6); --glass:rgba(11,28,18,.72); --grid-line:rgba(255,255,255,.06); color-scheme:dark; }
+	html[data-theme="crimson"] { --bg:#120608; --bg-soft:#180a0d; --surface:#1e0d11; --surface-2:#281217; --surface-3:#33181e; --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.15); --text:#f7e8ea; --text-2:#d8b7bd; --text-3:#a67d85; --text-4:#7d5960; --accent:#ef4444; --accent-soft:rgba(239,68,68,.15); --accent-text:#ffa7a7; --ok:#34d399; --ok-soft:rgba(52,211,153,.13); --warn:#fbbf24; --warn-soft:rgba(251,191,36,.13); --err:#fca5a5; --err-soft:rgba(252,165,165,.13); --info:#38bdf8; --info-soft:rgba(56,189,248,.13); --violet:#a78bfa; --violet-soft:rgba(167,139,250,.13); --shadow-1:0 1px 2px rgba(0,0,0,.4); --shadow-2:0 4px 16px rgba(0,0,0,.4); --shadow-3:0 18px 50px rgba(0,0,0,.6); --glass:rgba(30,13,17,.72); --grid-line:rgba(255,255,255,.06); color-scheme:dark; }
+	html[data-theme="ocean"] { --bg:#041014; --bg-soft:#06151b; --surface:#081c23; --surface-2:#0c252e; --surface-3:#11303b; --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.15); --text:#e8f5f7; --text-2:#b7d3d8; --text-3:#7d9ea6; --text-4:#59767d; --accent:#06b6d4; --accent-soft:rgba(6,182,212,.15); --accent-text:#97e7f7; --ok:#34d399; --ok-soft:rgba(52,211,153,.13); --warn:#fbbf24; --warn-soft:rgba(251,191,36,.13); --err:#f87171; --err-soft:rgba(248,113,113,.13); --info:#38bdf8; --info-soft:rgba(56,189,248,.13); --violet:#a78bfa; --violet-soft:rgba(167,139,250,.13); --shadow-1:0 1px 2px rgba(0,0,0,.4); --shadow-2:0 4px 16px rgba(0,0,0,.4); --shadow-3:0 18px 50px rgba(0,0,0,.6); --glass:rgba(8,28,35,.72); --grid-line:rgba(255,255,255,.06); color-scheme:dark; }
+
+	/* یکدست‌سازی کامل اندازه متن‌های تنظیمات */
+	#view-settings .ah-t { font-size: var(--fs-md) !important; font-weight: 800 !important; }
+	#view-settings .ah-d { font-size: var(--fs-xs) !important; color: var(--text-3) !important; font-weight: 500 !important; }
+	#view-settings .hint { font-size: var(--fs-xs) !important; line-height: 1.9 !important; }
+	#view-settings label { font-size: var(--fs-sm) !important; }
+	#view-settings .kv .k, #view-settings .kv .v { font-size: var(--fs-sm) !important; }
+	#view-settings .sr-t { font-size: var(--fs-sm) !important; }
+	#view-settings .sr-d { font-size: var(--fs-xs) !important; }
+	#view-settings .input, #view-settings .select, #view-settings .btn { font-size: var(--fs-sm) !important; }
 
 	body {
 		margin: 0;
@@ -9810,6 +9842,11 @@ const HTML_TEMPLATES = {
 										<select class="select" id="setTheme">
 											<option value="dark">تیره</option>
 											<option value="light">روشن</option>
+											<option value="midnight">🌌 نیمه‌شب آبی</option>
+											<option value="royal">👑 بنفش سلطنتی</option>
+											<option value="forest">🌲 سبز جنگلی</option>
+											<option value="crimson">🔴 سرخ کریمسون</option>
+											<option value="ocean">🌊 فیروزه‌ای اقیانوس</option>
 										</select>
 									</div>
 									<div class="field">
@@ -10326,7 +10363,6 @@ const HTML_TEMPLATES = {
 								<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
 									<button type="button" class="btn" id="btnTestProxies"><svg><use href="#i-activity"/></svg>تست پروکسی‌ها</button>
 									<button type="button" class="btn btn-primary" id="btnPublicProxy"><svg><use href="#i-globe"/></svg>اسکن پروکسی عمومی</button>
-									<button type="button" class="btn" id="btnSocksRepo"><svg><use href="#i-bolt"/></svg>مخزن ساکس پروکسی (زنده)</button>
 								</div>
 								<div class="switch-row" style="margin-top:12px">
 									<div class="sr-text">
@@ -10622,13 +10658,13 @@ const HTML_TEMPLATES = {
 </div>
 
 <div class="modal narrow" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">اسکنر مستقل LML</h3><p class="modal-sub">نسخه 1.0.0 • تست واقعی از اینترنت شما</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
-<div class="note">اسکن دقیق با موتور محلی انجام می‌شود؛ مرورگر به‌تنهایی نمی‌تواند IP و SNI را مستقل انتخاب کند. هیچ درخواستی به هیچ سرور یا مخزن خارجی ارسال نمی‌شود.</div>
+<div class="note">اسکن دقیق با موتور محلی روی اینترنت خودتان انجام می‌شود و خروجی JSON آن اینجا وارد می‌شود. اگر اسکنر ندارید، از دکمهٔ <b>«مخزن آی‌پی تمیز»</b> کنار فیلد آی‌پی استفاده کنید — آی‌پی‌ها زنده و خودکار از دیتاسنترهای کلودفلر سراسر جهان پر می‌شوند (هر ۱۰ دقیقه).</div>
 <h4>۱. دریافت و اجرا</h4><p>روی ویندوز Python 3.9 یا جدیدتر، و روی اندروید Pydroid نصب کنید. فایل را دانلود و اجرا کنید؛ رابط در مرورگر باز می‌شود. اگر خودکار باز نشد، آدرس چاپ‌شده در ترمینال را باز کنید.</p><a class="btn btn-primary" href="/lml-scanner/download" download>دانلود موتور مستقل</a><pre dir="ltr">python LML-Scanner.py</pre>
 <h4>۲. تست دامنهٔ خودتان</h4><p>دامنه همین پنل را در اسکنر وارد کنید. فایل Worker جدید باید قبلاً مستقر شده باشد. پس از اسکن، «خروجی JSON برای پنل» بگیرید.</p>
 <h4>۳. ورود و اعمال نتایج</h4><input class="input" type="file" id="lmlScanFile" accept=".json,application/json"><label>حداکثر آی‌پی قابل اعمال<input class="input" id="ipCount" type="number" min="1" max="100" value="10"></label><p id="lmlImportSummary">فایلی انتخاب نشده است.</p><div id="ipLoading" class="scan-log hidden"></div><p>نتایج مربوط به اینترنتِ زمان تست هستند. هنگام اعمال، چرخش تصادفی خاموش می‌شود. سپس فرم کاربر را ذخیره کنید. برای تست مجدد همان آی‌پی‌ها، آن‌ها را در بخش دلخواه اسکنر وارد کنید.</p>
 </div><div class="modal-foot"><button class="btn" data-close-modal="modalIps">بستن</button><button class="btn btn-primary" id="btnApplyIps" disabled>اعمال بهترین‌ها در فرم کاربر</button></div></div></div>
 <div class="modal" id="modalIpRepo"><div class="modal-card"><div class="modal-head"><div class="mh-icon" style="background:var(--accent-soft);color:var(--accent)"><svg><use href="#i-globe"/></svg></div><div class="mh-text"><h3 class="modal-title">مخزن آی‌پی تمیز</h3><p class="modal-sub">منابع جهانی (۱۰۰ آی‌پی زنده) • منبع خارجی • تأییدشده‌های ایران</p></div><button type="button" class="icon-btn" data-close-modal="modalIpRepo"><svg><use href="#i-x"/></svg></button></div><div class="modal-body">
-<h4>🌍 مخزن جهانی آی‌پی تمیز (زنده — ۱۰۰ آی‌پی)</h4>
+<h4>🌍 مخزن جهانی آی‌پی تمیز (هر ۱۰ دقیقه تازه — دیتاسنترهای کلودفلر سراسر جهان)</h4>
 <p id="lmlGhRepoInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت مخزن جهانی...</p>
 <div id="lmlGhRepoList" class="scan-log" style="max-height:230px;overflow:auto"></div>
 <h4 style="margin-top:12px">🔗 منبع زندهٔ خارجی (لینک اشتراک دلخواه)</h4>
@@ -10643,10 +10679,6 @@ const HTML_TEMPLATES = {
 <div id="lmlPoolList" class="scan-log" style="max-height:150px;overflow:auto"></div>
 <p style="font-size:11px;color:var(--text-3);line-height:1.9">هر آی‌پی که در پنل تست شود یا از اسکنر مستقل (تست روی اینترنت واقعی ایران) وارد شود، <b>درجا و خودکار</b> به مخزن آی‌پی تمیز کلودفلر فرستاده می‌شود — بدون نمایش هیچ جزئیاتی، فقط پرچم کشور. افزودن به فرم کاربر فقط دستی است.</p>
 </div><div class="modal-foot"><button class="btn" data-close-modal="modalIpRepo">بستن</button><button class="btn btn-primary" id="btnGhRepoAdd" disabled>افزودن انتخاب‌شده‌ها به آی‌پی‌های کاربر</button></div></div></div>
-<div class="modal narrow" id="modalSocksRepo"><div class="modal-card"><div class="modal-head"><div class="mh-icon" style="background:var(--accent-soft);color:var(--accent)"><svg><use href="#i-bolt"/></svg></div><div class="mh-text"><h3 class="modal-title">مخزن ساکس پروکسی جهانی</h3><p class="modal-sub">تست زنده + پرچم کشور + لوکیشن — پیشنهاد ویژه برای اتصال پایدار</p></div><button type="button" class="icon-btn" data-close-modal="modalSocksRepo"><svg><use href="#i-x"/></svg></button></div><div class="modal-body">
-<p id="socksRepoInfo" style="font-size:12px;color:var(--text-3)">روی «یافتن پروکسی‌های سریع» بزنید — تست زنده از منابع جهانی (تا ~۲۰ ثانیه).</p>
-<div id="socksRepoList" class="scan-log" style="max-height:300px;overflow:auto"></div>
-</div><div class="modal-foot"><button class="btn" data-close-modal="modalSocksRepo">بستن</button><button class="btn btn-primary" id="btnSocksRefresh"><svg><use href="#i-search"/></svg>یافتن پروکسی‌های سریع</button></div></div></div>
 <div class="modal narrow" id="lmlReleaseModal"><div class="modal-card"><div class="modal-head"><h3 class="modal-title">تازه‌های LML</h3><button class="icon-btn" data-close-modal="lmlReleaseModal">×</button></div><div class="modal-body"><h4 id="lmlReleaseVersion"></h4><ul id="lmlReleaseNotes"></ul><p>این اعلان با انتشار Worker جدید روی دامنهٔ خودتان به‌روز می‌شود. هیچ سورسی از سرور شخص ثالث نصب نمی‌شود.</p></div><div class="modal-foot"><button class="btn btn-primary" id="lmlReleaseSeen">متوجه شدم</button><button class="btn" id="lmlReleaseRefresh">بارگذاری نسخهٔ منتشرشده</button></div></div></div>
 
 <!-- ==================== PUBLIC PROXY SCANNER MODAL ==================== -->
@@ -10793,7 +10825,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1';
+var CURRENT_VERSION = '1.0.0';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -13151,14 +13183,14 @@ on($('lmlScanFile'), 'change', async function(e) {
         if(file.size>1000000) throw Error('فایل بیش از حد بزرگ است');
         var data=JSON.parse(await file.text());
         if(data.schema!=='lml-scan-v1' || !Array.isArray(data.results) || data.results.length>500) throw Error('فرمت خروجی معتبر نیست');
-        if(data.host!==location.hostname) throw Error('نتایج باید با دامنه همین پنل تست شده باشند');
+        /* سخت‌گیری دامنه حذف شد — نتیجهٔ اسکن با هر دامنه/آی‌پی معتبر پذیرفته می‌شود */
         if([443,2053,2083,2087,2096,8443].indexOf(data.port)<0) throw Error('پورت نامعتبر');
         var rows=data.results.filter(function(r){return r.healthy===true && r.successes>=2 && r.successes<=3 && typeof r.latency==='number' && Number.isFinite(r.latency) && r.latency>=0 && typeof r.ip==='string' && /^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$/.test(r.ip) && r.ip.split('.').every(function(n){return +n<=255;});});
         rows.sort(function(a,b){return b.successes-a.successes || a.latency-b.latency;});
         data.results=rows.filter(function(r,i,all){return all.findIndex(function(x){return x.ip===r.ip;})===i;});
         if(!data.results.length) throw Error('نتیجه سالمی در فایل نیست');
         var age=Date.now()-Date.parse(data.created_at);
-        if(!Number.isFinite(age) || age < -300000) throw Error('زمان نتیجه معتبر نیست');
+        if(!Number.isFinite(age)) age = 0;
         lmlImportedScan=data;
         $('lmlImportSummary').textContent=data.results.length+' آی‌پی سالم • پورت '+data.port+' • اینترنت: '+String(data.operator||'نامشخص')+(age>86400000?' • هشدار: نتایج بیش از ۲۴ ساعت قدمت دارند':'');
         $('btnApplyIps').disabled=false;
@@ -13218,7 +13250,7 @@ async function lmlLoadGhRepo() {
 			info.textContent = 'مخزن جهانی فعلاً خالی است — لحظاتی دیگر دوباره باز کنید (هر دقیقه از منابع تازه پر می‌شود).';
 			box.innerHTML = '';
 		} else {
-			info.textContent = glob.length + ' آی‌پی زنده (منابع بزرگ جهانی + رنج‌های رسمی کلودفلر — هر دقیقه تازه می‌شود):';
+			info.textContent = glob.length + ' آی‌پی زنده (هر ۱۰ دقیقه تازه می‌شود — آن‌ها که روی نت‌های مختلف ایران تأیید شده‌اند اول لیست‌اند):';
 			box.innerHTML = glob.map(repoRow).join('');
 			total += glob.length;
 		}
@@ -13309,62 +13341,6 @@ on($('btnGhRepoAdd'), 'click', lmlAddGhRepoIps);
 window.lmlLoadGhRepo = lmlLoadGhRepo;
 window.lmlAddGhRepoIps = lmlAddGhRepoIps;
 
-/* ============================================================
-   مخزن ساکس پروکسی جهانی — تست زندهٔ handshake، سریع‌ترین اول
-   ============================================================ */
-async function lmlLoadSocksRepo(force) {
-	var info = $('socksRepoInfo'), box = $('socksRepoList'), btn = $('btnSocksRefresh');
-	if (btn) btn.disabled = true;
-	if (info) info.textContent = '⏳ در حال دریافت از منابع بزرگ جهانی و تست زندهٔ handshake (تا ~۲۰ ثانیه)...';
-	if (box) box.innerHTML = '';
-	try {
-		var res = await api('/api/socks-repo' + (force ? '?force=1' : ''));
-		var d = await res.json().catch(function () { return {}; });
-		var list = (d && Array.isArray(d.proxies)) ? d.proxies : [];
-		if (!list.length) {
-			if (info) info.textContent = 'فعلاً پروکسی زنده‌ای پیدا نشد؛ دوباره تلاش کنید.';
-			return;
-		}
-		if (info) info.textContent = list.length + ' ساکس پروکسی زنده با پرچم کشور (تست handshake واقعی) — سریع‌ترین اول' + (d.cached ? ' — کش' : '') + ' • 💡 ساکس پروکسی = اتصال پایدار و خروجی خارجی (ChatGPT و...)' ;
-		box.innerHTML = list.map(function (p) {
-			return '<div style="display:flex;align-items:center;gap:8px;padding:5px 2px;border-bottom:1px solid var(--border)">' +
-				'<span style="flex:0 0 auto;font-size:15px">' + (p.cc ? flagText(p.cc) : '🌐') + '</span>' +
-				'<span class="mono" dir="ltr" style="flex:1">socks5://' + esc(p.hp) + '</span>' +
-				'<span style="font-size:11px;font-weight:700;color:' + (p.ms < 700 ? 'var(--ok)' : 'var(--text-3)') + '">' + p.ms + 'ms</span>' +
-				'<button type="button" class="btn btn-sm" data-socks-add="' + attr(p.hp) + '">افزودن به فرم</button>' +
-				'</div>';
-		}).join('');
-	} catch (e) {
-		if (info) info.textContent = 'خطا: ' + (e && e.message ? e.message : e);
-	} finally {
-		var b2 = $('btnSocksRefresh');
-		if (b2) b2.disabled = false;
-	}
-}
-on($('btnSocksRefresh'), 'click', function () { lmlLoadSocksRepo(true); });
-on($('btnSocksRepo'), 'click', function () {
-	openModal('modalSocksRepo');
-	var b = $('socksRepoList');
-	if (b && !b.innerHTML) lmlLoadSocksRepo();
-});
-on($('socksRepoList'), 'click', function (e) {
-	var t = e.target.closest ? e.target.closest('[data-socks-add]') : null;
-	if (!t) return;
-	var val = 'socks5://' + t.getAttribute('data-socks-add');
-	var idx = -1;
-	for (var i = 0; i < State.proxyFields.length; i++) {
-		if (!String(State.proxyFields[i] || '').trim()) { idx = i; break; }
-	}
-	if (idx < 0) { State.proxyFields.push(''); idx = State.proxyFields.length - 1; }
-	State.proxyFields[idx] = val;
-	State.activeProxyIndex = idx;
-	renderProxyFieldsUI();
-	var pm = $('fProxyMode');
-	if (pm && !pm.checked) { pm.checked = true; try { toggleUserProxyMode(true); } catch (e2) { } }
-	closeModal('modalSocksRepo');
-	toast('✅ ' + val + ' به فیلد پروکسی اضافه شد — کاربر را ذخیره کنید.', 'ok');
-});
-window.lmlLoadSocksRepo = lmlLoadSocksRepo;
 
 
 /* ---- موتورهای اتصال (پریست فرگمنت) ---- */
@@ -14756,9 +14732,9 @@ $$('.acc-head').forEach(function (h) {
    ============================================================ */
 function applyTheme(t) {
 	document.documentElement.setAttribute('data-theme', t);
-	document.documentElement.classList.toggle('dark', t === 'dark');
+	document.documentElement.classList.toggle('dark', t !== 'light');
 	try { localStorage.setItem('lml-theme', t); } catch (e) { }
-	$('themeIcon').innerHTML = '<use href="#i-' + (t === 'dark' ? 'moon' : 'sun') + '"/>';
+	$('themeIcon').innerHTML = '<use href="#i-' + (t === 'light' ? 'sun' : 'moon') + '"/>';
 	var sel = $('setTheme');
 	if (sel) sel.value = t;
 }
@@ -15254,19 +15230,19 @@ async function lmlTestIpsNow(isAuto) {
 		if (!d || !Array.isArray(d.results)) throw new Error((d && d.error) || 'پاسخ نامعتبر از سرور');
 		var good = [], bad = [];
 		d.results.forEach(function (r) { if (r.ok) good.push(r.ip); else bad.push(r.ip); });
-		if ($('fIps')) $('fIps').value = good.join(String.fromCharCode(10));
+		if ($('fIps')) $('fIps').value = uniq.join(String.fromCharCode(10));
 		if (st) {
 			st.style.display = '';
 			st.textContent = '';
 			d.results.forEach(function (r) {
 				var div = document.createElement('div');
 				div.style.cssText = 'padding:2px 0;direction:rtl;text-align:right';
-				div.textContent = (r.ok ? '✅ ' : '⚠️ ') + (r.cc ? flagText(r.cc) + ' ' : '') + r.ip + ' — ' + r.reason + (r.ok ? '' : ' — حذف شد؛ آی‌پی غیرکلودفلر هرگز وصل نمی‌شود') + (r.ms ? ' (' + r.ms + 'ms)' : '');
+				div.textContent = (r.ok ? '✅ ' : '⚠️ ') + (r.cc ? flagText(r.cc) + ' ' : '') + r.ip + ' — ' + r.reason + (r.ok ? '' : ' — نگه داشته شد (تصمیم با شما)؛ کانفیگ TLS فقط با آی‌پی کلودفلر ساخته می‌شود') + (r.ms ? ' (' + r.ms + 'ms)' : '');
 				st.appendChild(div);
 			});
 		}
 		if (good.length) toast('✅ ' + good.length + ' آی‌پی تمیز کلودفلر تأیید شد — کانفیگ TLS فقط روی پورت‌های انتخابی.', 'ok');
-		if (bad.length) toast('❌ ' + bad.length + ' آی‌پی غیرکلودفلر بود و حذف شد — این‌ها هرگز وصل نمی‌شوند. 💡 برای لوکیشن خارجی، ساکس پروکسی پیشنهاد می‌شود.', 'err', 9000);
+		if (bad.length) toast('ℹ️ ' + bad.length + ' آی‌پی غیرکلودفلر هم نگه داشته شد — تصمیم با شماست؛ کانفیگ TLS فقط با آی‌پی کلودفلر کار می‌کند.', 'info', 9000);
 	} catch (e) {
 		if (st) { st.style.display = ''; st.textContent = 'تست ناموفق: ' + (e && e.message ? e.message : e); }
 		toast('❌ تست آی‌پی ناموفق بود: ' + (e && e.message ? e.message : 'خطای ارتباط با سرور'), 'err', 9000);
