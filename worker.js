@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.0";
+const LML_PANEL_VERSION = "1.0.1";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -2577,6 +2577,19 @@ const Router = {
 				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
 			}
 		}
+		if (url.pathname === "/api/myip" && request.method === "GET") {
+			try {
+				const session = await DbService.getSession(request, env);
+				if (!session) return new Response(JSON.stringify({ ip: "", cc: "", city: "" }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
+				const cfM = (request && request.cf) ? request.cf : {};
+				const myIp = String(request.headers.get("CF-Connecting-IP") || "");
+				const myCc = String(cfM.country || "");
+				const myCity = String(cfM.city || "");
+				return new Response(JSON.stringify({ ip: myIp, cc: myCc, city: myCity, flag: lmlFlagEmoji(myCc) }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+			} catch (e) {
+				return new Response(JSON.stringify({ ip: "", cc: "", city: "" }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
+			}
+		}
 		if (url.pathname === "/api/crowd-probe" && request.method === "POST") {
 			try {
 				const clientIp = String(request.headers.get("CF-Connecting-IP") || "anon");
@@ -4619,7 +4632,7 @@ rules:
 				"utls": { "enabled": true, "fingerprint": String(user.fingerprint || "chrome") },
 				"fragment": { "packets": fragPackets, "length": fragLen, "mode": "random" }
 			},
-			"transport": { "type": "ws", "path": path + "?ed=2560", "headers": { "Host": host }, "early_data_header_name": "Sec-WebSocket-Protocol" }
+			"transport": { "type": "ws", "path": path, "headers": { "Host": host } }
 		};
 		if (detourTag) vlessOut.detour = detourTag;
 		const routeRules = [];
@@ -4841,7 +4854,7 @@ rules:
 					flagEmoji = String.fromCodePoint(...codePoints);
 				} catch (e) { }
 			}
-			const currentDynPath = encodeURIComponent(rawPath + (proxyItem !== null && proxyItem !== "" ? `/loc-${locIdx}` : "") + "?ed=2560");
+			const currentDynPath = encodeURIComponent(rawPath + (proxyItem !== null && proxyItem !== "" ? `/loc-${locIdx}` : ""));
 			resolvedProxies.push({ flagEmoji, currentDynPath });
 		}
 		const connType = String(user.connection_type || "vless").toLowerCase();
@@ -4873,7 +4886,7 @@ rules:
 					if (user.tls_mask) userFrag += "&mask=" + encodeURIComponent(user.tls_mask);
 						
 					const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
-					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost + "&alpn=http%2F1.1" + echGt) : "";
+					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost + echGt) : "";
 
 					if (enableVless) {
 						const remark = remarkBase;
@@ -8945,6 +8958,7 @@ const HTML_TEMPLATES = {
 
 			<div class="tb-group">
 				<span class="badge" id="liveBadge" title="وضعیت ارتباط با سرور"><span class="dot-live off" id="liveDot"></span><span id="liveText">در حال اتصال</span></span>
+				<span class="badge" id="myIpBadge" style="display:none;direction:ltr;font-family:var(--font-mono)" title="آی‌پی و موقعیت شما"></span>
 				<span class="badge muted hidden" id="resellerBadge" title="اطلاعات نماینده"></span>
 			</div>
 			<div class="tb-sep"></div>
@@ -10779,7 +10793,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.0';
+var CURRENT_VERSION = '1.0.1';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -12027,7 +12041,7 @@ function getvIeesLink(username) {
 		var proxyStr = (proxyItem && typeof proxyItem === 'object') ? proxyItem.proxy : proxyItem;
 		var cc = (proxyItem && typeof proxyItem === 'object') ? proxyItem.country : (user.user_proxy_iata || '');
 		if (!cc && proxyStr && proxyFlagCache[proxyStr]) cc = proxyFlagCache[proxyStr];
-		var currentDynPath = encodeURIComponent(rawPath + ((proxyItem !== null && proxyItem !== '') ? '/loc-' + li : '') + '?ed=2560');
+		var currentDynPath = encodeURIComponent(rawPath + ((proxyItem !== null && proxyItem !== '') ? '/loc-' + li : ''));
 		resolvedProxies.push({ flagEmoji: flagText(cc), currentDynPath: currentDynPath });
 	}
 	var userConnType = String(user.connection_type || 'vless').toLowerCase();
@@ -12053,7 +12067,7 @@ function getvIeesLink(username) {
 				if (isTlsPort && user.cipher_suites) userFrag += '&cs=' + encodeURIComponent(user.cipher_suites);
 				if (user.tls_mask) userFrag += '&mask=' + encodeURIComponent(user.tls_mask);
 				var insecureFlag = (isTlsPort && entry.ip) ? '1' : '0';
-				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host + '&alpn=http%2F1.1' + (State.echParam || '')) : '';
+				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host + (State.echParam || '')) : '';
 				var ipCcP = entry.ip ? ((State.ipCcMap || {})[entry.ip] || '') : '';
 				var isChainedP = String(proxy.currentDynPath).indexOf('loc-') >= 0;
 				var chainFlagP = (isChainedP && proxy.flagEmoji && proxy.flagEmoji !== '🌐') ? (proxy.flagEmoji + ' ') : '';
@@ -13166,6 +13180,19 @@ on($('btnOpenIpRepo'), 'click', openIpRepoModal);
 on($('btnOpenIpRepo2'), 'click', openIpRepoModal);
 on($('btnOpenIpRepo3'), 'click', openIpRepoModal);
 on($('btnOpenLmlRepo'), 'click', function () { openModal('modalIpRepo'); lmlLoadGhRepo(); });
+/* نمایش آی‌پی + پرچم کشور مدیر در گوشهٔ نوار بالا */
+(async function () {
+	try {
+		var bM = $('myIpBadge');
+		if (!bM) return;
+		var rM = await api('/api/myip');
+		var dM = await rM.json().catch(function () { return {}; });
+		if (dM && dM.ip) {
+			bM.textContent = (dM.flag ? dM.flag + ' ' : '') + (dM.cc ? dM.cc + ' • ' : '') + dM.ip;
+			bM.style.display = '';
+		}
+	} catch (eM) { }
+})();
 
 /* ============================================================
    مخزن آی‌پی گیت‌هاب (live-ips.json) — فقط افزودن دستی توسط مدیر
@@ -16995,7 +17022,7 @@ ${COMMON_TOAST_HTML}
 				} else if (proxyStr && proxyFlagCache[proxyStr] && typeof getFlagEmojiText === 'function') {
 					flagEmoji = getFlagEmojiText(proxyFlagCache[proxyStr]);
 				}
-				const currentDynPath = encodeURIComponent(rawPath + ((proxyItem !== null && proxyItem !== "") ? "/loc-" + locIdx : "") + "?ed=2560");
+				const currentDynPath = encodeURIComponent(rawPath + ((proxyItem !== null && proxyItem !== "") ? "/loc-" + locIdx : ""));
 				resolvedProxies.push({ flagEmoji, currentDynPath });
 			}
 			const userConnType = String(u.connection_type || 'vless').toLowerCase();
@@ -17024,7 +17051,7 @@ ${COMMON_TOAST_HTML}
 						if (u.tls_mask) userFrag += "&mask=" + encodeURIComponent(u.tls_mask);
 						
 						const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
-						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host + "&alpn=http%2F1.1" + (u.ech_param || "")) : "";
+						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host + (u.ech_param || "")) : "";
 
 						if (enableVless) {
 							const remark = "LML | " + chainFlagSt + ipPartSt + u.username;
