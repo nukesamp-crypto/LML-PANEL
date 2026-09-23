@@ -314,29 +314,7 @@ async function lmlLoadIpTestMem(env) {
 async function lmlGetBadIps(env) { return (await lmlLoadIpTestMem(env)).bad || {}; }
 async function lmlGetIpCc(env) { return (await lmlLoadIpTestMem(env)).cc || {}; }
 
-/* ============================================================
-   ECH — پنهان‌سازی دامنه از DPI (فرمت سازگار v2rayNG/Husi)
-   لینک: &ech=<sni>+<doh> — کلاینت‌های قدیمی نادیده می‌گیرند
-   ============================================================ */
-let LML_ECH_MEM = { at: 0, val: null };
-async function lmlGetEchParam(env) {
-	try {
-		const now = Date.now();
-		if (LML_ECH_MEM.val !== null && (now - LML_ECH_MEM.at) < 300000) return LML_ECH_MEM.val;
-		let enabled = false;
-		try {
-			if (env && env.DB) {
-				const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'ech_enabled'").first();
-				enabled = !!(row && row.value === "1");
-			}
-		} catch (e) { }
-		LML_ECH_MEM = { at: now, val: enabled };
-		return enabled;
-	} catch (e) { return false; }
-}
-function lmlEchParam(host) {
-	try { return "&ech=" + encodeURIComponent(String(host) + "+" + "https://cloudflare-dns.com/dns-query"); } catch (e) { return ""; }
-}
+
 
 /* ============================================================
    CROWD NETWORK — تست سلامت آی‌پی از نت واقعی کاربران
@@ -1907,10 +1885,8 @@ const Router = {
 			}
 			const userIpsMap = GLOBAL_ACTIVE_IPS.get(user.username);
 			const liveIpCount = userIpsMap ? userIpsMap.size : 0;
-			let echParamSt = "";
 			let crowdSampleSt = [];
 			try {
-				if (await lmlGetEchParam(env)) echParamSt = lmlEchParam(await lmlPanelHostResolve(env, url.hostname));
 				crowdSampleSt = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
 				for (let si = crowdSampleSt.length - 1; si > 0; si--) { const sj = Math.floor(Math.random() * (si + 1)); const stmp = crowdSampleSt[si]; crowdSampleSt[si] = crowdSampleSt[sj]; crowdSampleSt[sj] = stmp; }
 				crowdSampleSt = crowdSampleSt.slice(0, 6);
@@ -1931,7 +1907,6 @@ const Router = {
 				port: user.port,
 				ips: user.ips,
 				ips_bad: badListSt,
-				ech_param: echParamSt,
 				crowd_ips: crowdSampleSt,
 				fingerprint: user.fingerprint || "chrome",
 				connection_type: user.connection_type || "vless",
@@ -3890,8 +3865,6 @@ const Router = {
 						try { globalPoolApi = (await lmlGetGlobalRepoIps()).slice(0, 8); } catch (e) { }
 						const badIpsApi = await lmlGetBadIps(env);
 						const ipCcApi = await lmlGetIpCc(env);
-						let echParamApi = "";
-						try { if (await lmlGetEchParam(env)) echParamApi = lmlEchParam(await lmlPanelHostResolve(env, url.hostname)); } catch (e) { }
 						const enrichedUsers = (results || []).map((user) => {
 							/* IP-FREE: آی‌پی‌های خود کاربر همیشه اول و ثابت است؛ چرخش فقط اضافه می‌کند */
 							const ownIpsList = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
@@ -3951,7 +3924,6 @@ const Router = {
 							JSON.stringify({
 								users: enrichedUsers,
 								ip_cc: ipCcApi,
-								ech_param: echParamApi,
 								serverTime: now,
 								cfRequestsToday: cfReqs.today,
 								cfRequestsTotal: cfReqs.total,
@@ -4718,7 +4690,6 @@ rules:
 		if (!ips.length) ips = [host];
 		/* ---- IP-FREE: آی‌پی‌های کاربر مستقیم در لینک TLS (با SNI=دامنه)؛ بدون بررسی رنج ---- */
 		const lmlHost = await lmlPanelHostResolve(env, host);
-		let echGt = ""; /* ECH غیرفعالِ دائم: پارامتر ech با کلاینت‌های قدیمی اتصال را می‌کُشت */
 		let lmlCleanIps = [];
 		{
 			const wantCount = Math.max(1, Math.min(parseInt(user.ip_count, 10) || 20, 40));
@@ -4907,7 +4878,7 @@ rules:
 					if (user.tls_mask) userFrag += "&mask=" + encodeURIComponent(user.tls_mask);
 						
 					const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
-					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost + echGt) : "";
+					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost) : "";
 
 					if (enableVless) {
 						const remark = remarkBase;
@@ -9886,13 +9857,6 @@ const HTML_TEMPLATES = {
 								</div>
 								<div class="switch-row">
 									<div class="sr-text">
-										<div class="sr-t">🕶️ ECH — پنهان‌سازی دامنه از فیلترچی</div>
-										<div class="sr-d">SNI واقعی داخل handshake رمز می‌شود (Encrypted ClientHello). کلاینت‌های قدیمی خودکار به حالت عادی برمی‌گردند — چیزی خراب نمی‌شود.</div>
-									</div>
-									<label class="switch"><input type="checkbox" id="setEch"><i></i></label>
-								</div>
-								<div class="switch-row">
-									<div class="sr-text">
 										<div class="sr-t">حالت سیاه‌وسفید</div>
 										<div class="sr-d">حذف رنگ‌ها از کل رابط</div>
 									</div>
@@ -11751,7 +11715,6 @@ function renderUsersUI(data) {
 
 	State.allUsers = users;
 	State.ipCcMap = data.ip_cc || {};
-	State.echParam = data.ech_param || '';
 	State.ipBadList = [];
 	try {
 		users.forEach(function (u) {
@@ -14789,12 +14752,6 @@ on($('setGrayscale'), 'change', function () {
 	try { localStorage.setItem('grayscale-theme', this.checked ? 'true' : 'false'); } catch (e) { }
 });
 on($('setGfx'), 'change', function () { toggleGfx(this.checked); });
-on($('setEch'), 'change', function () {
-	var cbE = this;
-	api('/api/settings/bulk', { body: { settings: { ech_enabled: cbE.checked ? '1' : '0' } } })
-		.then(function () { toast(cbE.checked ? '✅ ECH فعال شد — کانفیگ‌های جدید با SNI رمزنگاری‌شده ساخته می‌شوند' : '✅ ECH غیرفعال شد', 'ok'); })
-		.catch(function () { toast('خطا در ذخیره تنظیمات', 'err'); cbE.checked = !cbE.checked; });
-});
 on($('btnSideSettingsGfx'), 'click', function () {
 	applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
 });
@@ -14906,7 +14863,6 @@ async function loadSettings() {
 	$('setDensity').value = document.documentElement.getAttribute('data-density') || 'comfortable';
 	$('setSidebar').value = document.documentElement.getAttribute('data-sidebar') || 'expanded';
 	$('setGfx').checked = !document.documentElement.classList.contains('gfx-off');
-	try { $('setEch').checked = State.settings.ech_enabled === '1'; } catch (e) { }
 	$('setGrayscale').checked = document.documentElement.classList.contains('grayscale-active');
 }
 on($('btnSettingsReload'), 'click', function () { loadSettings(); toast('✅ تنظیمات مجدداً بارگذاری شد', 'ok'); });
@@ -14927,7 +14883,6 @@ async function saveAllSettings() {
 	var payload = {};
 	payload.auto_update = $('setAutoUpdate').checked ? '1' : '0';
 	payload.gfx_enabled = $('setGfx').checked ? '1' : '0';
-	try { payload.ech_enabled = $('setEch').checked ? '1' : '0'; } catch (e) { }
 	var tgT = $('setTgToken').value.trim();
 	var tgA = $('setTgAdmin').value.trim();
 	if (tgT) payload.tg_bot_token = tgT;
