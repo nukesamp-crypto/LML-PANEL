@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1";
+const LML_PANEL_VERSION = "1.0.2";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -7931,6 +7931,9 @@ const HTML_TEMPLATES = {
 
 	html.grayscale-active { filter: grayscale(100%); }
 
+	/* بخش پروکسی خروجی کاملاً برداشته شد — المان‌ها در DOM می‌مانند تا ذخیره/لود کاربرها هرگز نشکند */
+	#vtab-proxy { display: none !important; }
+
 	/* بخش کاربر و پروکسی خروجی: فقط فرم خالی و تمیز — متن‌های توضیحی اضافه حذف */
 	#modalUser .sr-d, #modalUser .hint, #modalUser .note { display: none !important; }
 	#modalUser .acc-body .field > label + .hint { display: none !important; }
@@ -7943,8 +7946,8 @@ const HTML_TEMPLATES = {
 	html[data-theme="ocean"] { --bg:#041014; --bg-soft:#06151b; --surface:#081c23; --surface-2:#0c252e; --surface-3:#11303b; --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.15); --text:#e8f5f7; --text-2:#b7d3d8; --text-3:#7d9ea6; --text-4:#59767d; --accent:#06b6d4; --accent-soft:rgba(6,182,212,.15); --accent-text:#97e7f7; --ok:#34d399; --ok-soft:rgba(52,211,153,.13); --warn:#fbbf24; --warn-soft:rgba(251,191,36,.13); --err:#f87171; --err-soft:rgba(248,113,113,.13); --info:#38bdf8; --info-soft:rgba(56,189,248,.13); --violet:#a78bfa; --violet-soft:rgba(167,139,250,.13); --shadow-1:0 1px 2px rgba(0,0,0,.4); --shadow-2:0 4px 16px rgba(0,0,0,.4); --shadow-3:0 18px 50px rgba(0,0,0,.6); --glass:rgba(8,28,35,.72); --grid-line:rgba(255,255,255,.06); color-scheme:dark; }
 
 	/* یکدست‌سازی کامل اندازه متن‌های تنظیمات */
-	#view-settings .ah-t { font-size: var(--fs-md) !important; font-weight: 800 !important; }
-	#view-settings .ah-d { font-size: var(--fs-xs) !important; color: var(--text-3) !important; font-weight: 500 !important; }
+	#view-settings .ah-t { font-size: var(--fs-sm) !important; font-weight: 700 !important; }
+	#view-settings .ah-d { font-size: var(--fs-sm) !important; color: var(--text-3) !important; font-weight: 400 !important; }
 	#view-settings .hint { font-size: var(--fs-xs) !important; line-height: 1.9 !important; }
 	#view-settings label { font-size: var(--fs-sm) !important; }
 	#view-settings .kv .k, #view-settings .kv .v { font-size: var(--fs-sm) !important; }
@@ -10126,7 +10129,6 @@ const HTML_TEMPLATES = {
 					<div class="vtabs-nav" id="userVtabs">
 						<button type="button" class="vtab active" data-vtab="vtab-account"><span class="vnum">۱</span><span>اطلاعات حساب</span></button>
 						<button type="button" class="vtab" data-vtab="vtab-network"><span class="vnum">۲</span><span>پورت و شبکه</span></button>
-						<button type="button" class="vtab" data-vtab="vtab-proxy"><span class="vnum">۳</span><span>پروکسی خروجی</span></button>
 					</div>
 
 					<div class="vtabs-body">
@@ -10829,7 +10831,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1';
+var CURRENT_VERSION = '1.0.2';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -12560,8 +12562,8 @@ function renderPortCheckboxes(selected) {
 		return '<label class="port-chip nontls"><input type="checkbox" name="ports" value="' + p + '"' + (on ? ' checked' : '') + '><span>' + p + '</span></label>';
 	}).join('');
 }
-var USER_STEPS = ['vtab-account', 'vtab-network', 'vtab-proxy'];
-var USER_STEP_FA = ['۱', '۲', '۳'];
+var USER_STEPS = ['vtab-account', 'vtab-network'];
+var USER_STEP_FA = ['۱', '۲'];
 function setUserModalTab(id) {
 	if (USER_STEPS.indexOf(id) < 0) id = USER_STEPS[0];
 	$$('#userVtabs .vtab').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-vtab') === id); });
