@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.0";
+const LML_PANEL_VERSION = "1.0.1";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -7931,6 +7931,10 @@ const HTML_TEMPLATES = {
 
 	html.grayscale-active { filter: grayscale(100%); }
 
+	/* بخش کاربر و پروکسی خروجی: فقط فرم خالی و تمیز — متن‌های توضیحی اضافه حذف */
+	#modalUser .sr-d, #modalUser .hint, #modalUser .note { display: none !important; }
+	#modalUser .acc-body .field > label + .hint { display: none !important; }
+
 	/* ---- پنج تم جدید LML (همه بر پایهٔ طرح تیره — خوانایی کامل) ---- */
 	html[data-theme="midnight"] { --bg:#050a18; --bg-soft:#081020; --surface:#0b1428; --surface-2:#101b33; --surface-3:#16233f; --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.15); --text:#e8ecf7; --text-2:#b7c0d8; --text-3:#7d88a6; --text-4:#59627d; --accent:#3b82f6; --accent-soft:rgba(59,130,246,.15); --accent-text:#93b4ff; --ok:#34d399; --ok-soft:rgba(52,211,153,.13); --warn:#fbbf24; --warn-soft:rgba(251,191,36,.13); --err:#f87171; --err-soft:rgba(248,113,113,.13); --info:#38bdf8; --info-soft:rgba(56,189,248,.13); --violet:#a78bfa; --violet-soft:rgba(167,139,250,.13); --shadow-1:0 1px 2px rgba(0,0,0,.4); --shadow-2:0 4px 16px rgba(0,0,0,.4); --shadow-3:0 18px 50px rgba(0,0,0,.6); --glass:rgba(11,20,40,.72); --grid-line:rgba(255,255,255,.06); color-scheme:dark; }
 	html[data-theme="royal"] { --bg:#0a0614; --bg-soft:#100a1e; --surface:#150e28; --surface-2:#1c1334; --surface-3:#241a42; --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.15); --text:#ece8f7; --text-2:#c0b7d8; --text-3:#8b7da6; --text-4:#63597d; --accent:#a855f7; --accent-soft:rgba(168,85,247,.15); --accent-text:#d0a7ff; --ok:#34d399; --ok-soft:rgba(52,211,153,.13); --warn:#fbbf24; --warn-soft:rgba(251,191,36,.13); --err:#f87171; --err-soft:rgba(248,113,113,.13); --info:#38bdf8; --info-soft:rgba(56,189,248,.13); --violet:#c4b5fd; --violet-soft:rgba(196,181,253,.13); --shadow-1:0 1px 2px rgba(0,0,0,.4); --shadow-2:0 4px 16px rgba(0,0,0,.4); --shadow-3:0 18px 50px rgba(0,0,0,.6); --glass:rgba(21,14,40,.72); --grid-line:rgba(255,255,255,.06); color-scheme:dark; }
@@ -10825,7 +10829,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.0';
+var CURRENT_VERSION = '1.0.1';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
