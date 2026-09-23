@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.0";
+const LML_PANEL_VERSION = "1.0.1";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -7948,8 +7948,9 @@ const HTML_TEMPLATES = {
 	/* کل تنظیمات: یک اندازهٔ کوچک و یکدست مثل بقیهٔ پنل — هیچ بزرگ/کوچکی نداریم */
 	#view-settings * { font-size: var(--fs-sm) !important; }
 	#view-settings .page-title { font-size: var(--fs-lg) !important; font-weight: 800 !important; }
-	#view-settings .ah-t { font-weight: 700 !important; }
+	#view-settings .ah-t { font-weight: 500 !important; }
 	#view-settings .ah-d { color: var(--text-3) !important; font-weight: 400 !important; }
+	#view-settings .acc-head, #view-settings .acc-head * { font-size: var(--fs-sm) !important; }
 	#view-settings .kv .k { color: var(--text-3) !important; }
 	#view-settings .hint { font-size: var(--fs-xs) !important; line-height: 1.9 !important; }
 	#view-settings label { font-size: var(--fs-sm) !important; }
@@ -10834,7 +10835,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.0';
+var CURRENT_VERSION = '1.0.1';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
