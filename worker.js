@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1";
+const LML_PANEL_VERSION = "1.0.0";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -4718,8 +4718,7 @@ rules:
 		if (!ips.length) ips = [host];
 		/* ---- IP-FREE: آی‌پی‌های کاربر مستقیم در لینک TLS (با SNI=دامنه)؛ بدون بررسی رنج ---- */
 		const lmlHost = await lmlPanelHostResolve(env, host);
-		let echGt = "";
-		try { if (env && await lmlGetEchParam(env)) echGt = lmlEchParam(lmlHost); } catch (e) { }
+		let echGt = ""; /* ECH غیرفعالِ دائم: پارامتر ech با کلاینت‌های قدیمی اتصال را می‌کُشت */
 		let lmlCleanIps = [];
 		{
 			const wantCount = Math.max(1, Math.min(parseInt(user.ip_count, 10) || 20, 40));
@@ -7948,6 +7947,8 @@ const HTML_TEMPLATES = {
 	/* کل تنظیمات: یک اندازهٔ کوچک و یکدست مثل بقیهٔ پنل — هیچ بزرگ/کوچکی نداریم */
 	#view-settings * { font-size: var(--fs-sm) !important; }
 	#view-settings .page-title { font-size: var(--fs-lg) !important; font-weight: 800 !important; }
+	#view-settings .ah-text { display: flex !important; flex-direction: column !important; gap: 4px !important; align-items: flex-start !important; }
+	#view-settings .ah-t, #view-settings .ah-d { display: block !important; }
 	#view-settings .ah-t { font-weight: 500 !important; }
 	#view-settings .ah-d { color: var(--text-3) !important; font-weight: 400 !important; }
 	#view-settings .acc-head, #view-settings .acc-head * { font-size: var(--fs-sm) !important; }
@@ -10835,7 +10836,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1';
+var CURRENT_VERSION = '1.0.0';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -12109,7 +12110,7 @@ function getvIeesLink(username) {
 				if (isTlsPort && user.cipher_suites) userFrag += '&cs=' + encodeURIComponent(user.cipher_suites);
 				if (user.tls_mask) userFrag += '&mask=' + encodeURIComponent(user.tls_mask);
 				var insecureFlag = (isTlsPort && entry.ip) ? '1' : '0';
-				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host + (State.echParam || '')) : '';
+				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host) : '';
 				var ipCcP = entry.ip ? ((State.ipCcMap || {})[entry.ip] || '') : '';
 				var isChainedP = String(proxy.currentDynPath).indexOf('loc-') >= 0;
 				var chainFlagP = (isChainedP && proxy.flagEmoji && proxy.flagEmoji !== '🌐') ? (proxy.flagEmoji + ' ') : '';
@@ -17037,7 +17038,7 @@ ${COMMON_TOAST_HTML}
 						if (u.tls_mask) userFrag += "&mask=" + encodeURIComponent(u.tls_mask);
 						
 						const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
-						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host + (u.ech_param || "")) : "";
+						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host) : "";
 
 						if (enableVless) {
 							const remark = "LML | " + chainFlagSt + ipPartSt + u.username;
