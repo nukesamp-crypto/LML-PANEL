@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1";
+const LML_PANEL_VERSION = "1.0.0";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -668,6 +668,10 @@ async function lmlGetGlobalRepoIps() {
 	} catch (e) { return (LML_GLOBAL_IPS_MEM.ips || []); }
 }
 /* تست زندهٔ SOCKS5: handshake واقعی (greeting 05 01 00 -> 05 00) */
+/* تست واقعی و سنگین SOCKS5 — موتور پنهان:
+   ۱) greeting  ۲) CONNECT به هدف واقعی  ۳) دریافت نخستین بایت HTTP
+   پروکسی‌ای که فقط پینگ/handshake می‌دهد ولی ترافیک رد نمی‌کند، اینجا رد می‌شود.
+   جایزه: کشور پروکسی از پاسخ هدف استخراج می‌شود (بدون geo اضافی). */
 async function lmlSocksAlive(hostport, timeoutMs) {
 	const t0 = Date.now();
 	let sock = null;
@@ -680,21 +684,48 @@ async function lmlSocksAlive(hostport, timeoutMs) {
 		sock = connect({ hostname: host, port: port });
 		const writer = sock.writable.getWriter();
 		const reader = sock.readable.getReader();
-		const ok = await Promise.race([
-			(async function () {
-				try {
-					await writer.write(new Uint8Array([0x05, 0x01, 0x00]));
-					const res = await reader.read();
-					const v = res && res.value;
-					return !!(v && v.length >= 2 && v[0] === 0x05 && v[1] === 0x00);
-				} catch (e) { return false; }
-			})(),
+		const work = (async function () {
+			try {
+				await writer.write(new Uint8Array([0x05, 0x01, 0x00]));
+				let res = await reader.read();
+				let v = res && res.value;
+				if (!v || v.length < 2 || v[0] !== 0x05 || v[1] !== 0x00) return null;
+				const th = "ip-api.com";
+				const connReq = new Uint8Array(5 + th.length + 2);
+				connReq[0] = 0x05; connReq[1] = 0x01; connReq[2] = 0x00; connReq[3] = 0x03; connReq[4] = th.length;
+				for (let i = 0; i < th.length; i++) connReq[5 + i] = th.charCodeAt(i);
+				connReq[5 + th.length] = 0; connReq[6 + th.length] = 80;
+				await writer.write(connReq);
+				res = await reader.read();
+				v = res && res.value;
+				if (!v || v.length < 2 || v[0] !== 0x05 || v[1] !== 0x00) return null;
+				const httpReq = new TextEncoder().encode("GET /json/?fields=countryCode,query HTTP/1.1\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n");
+				await writer.write(httpReq);
+				let body = "";
+				const dec = new TextDecoder();
+				let guard = 0;
+				while (body.length < 500 && guard < 5) {
+					res = await reader.read();
+					if (res.done || !res.value || !res.value.length) break;
+					body += dec.decode(res.value, { stream: true });
+					guard++;
+					if (body.indexOf("countryCode") >= 0) break;
+				}
+				if (body.indexOf("HTTP/") < 0) return null;
+				let cc = "";
+				const mm = /"countryCode":"([A-Za-z]{2})"/.exec(body);
+				if (mm) cc = mm[1].toUpperCase();
+				return { hp: host + ":" + port, ms: Date.now() - t0, cc: cc };
+			} catch (e) { return null; }
+		})();
+		const out = await Promise.race([
+			work,
 			new Promise(function (resolve) {
-				timer = setTimeout(function () { try { sock.close(); } catch (e) { } resolve(false); }, timeoutMs || 2200);
+				timer = setTimeout(function () { try { sock.close(); } catch (e) { } resolve(null); }, timeoutMs || 3500);
 			})
 		]);
 		if (timer) clearTimeout(timer);
-		return ok ? { hp: host + ":" + port, ms: Date.now() - t0 } : null;
+		return out || null;
 	} catch (e) {
 		if (timer) clearTimeout(timer);
 		return null;
@@ -727,12 +758,12 @@ async function lmlGetSocksRepo(force) {
 				const j = Math.floor(Math.random() * (s + 1));
 				const tmp = shuffled[s]; shuffled[s] = shuffled[j]; shuffled[j] = tmp;
 			}
-			const test = shuffled.filter(function (hp) { return !triedHp[hp]; }).slice(0, 80);
+			const test = shuffled.filter(function (hp) { return !triedHp[hp]; }).slice(0, 45);
 			if (!test.length) break;
 			test.forEach(function (hp) { triedHp[hp] = 1; });
 			testedCount += test.length;
-			for (let i = 0; i < test.length; i += 20) {
-				const rs = await Promise.all(test.slice(i, i + 20).map(function (hp) { return lmlSocksAlive(hp, 1800); }));
+			for (let i = 0; i < test.length; i += 15) {
+				const rs = await Promise.all(test.slice(i, i + 15).map(function (hp) { return lmlSocksAlive(hp, 3200); }));
 				rs.forEach(function (r) { if (r) alive.push(r); });
 				if (alive.length >= 20) break;
 			}
@@ -740,10 +771,13 @@ async function lmlGetSocksRepo(force) {
 		}
 		alive.sort(function (a, b) { return a.ms - b.ms; });
 		const out = alive.slice(0, 30);
-		/* پرچم کشور هر پروکسی — یک درخواست دسته‌ای، بهترین تلاش */
+		/* کشور هر پروکسی اکثراً از پاسخ تست واقعی آمده؛ geo فقط برای جاافتاده‌ها */
 		try {
-			const ccMap = await lmlGeoBatch(out.map(function (p) { return p.hp.split(":")[0]; }));
-			out.forEach(function (p) { p.cc = ccMap[p.hp.split(":")[0]] || ""; });
+			const needGeo = out.filter(function (p) { return !p.cc; }).map(function (p) { return p.hp.split(":")[0]; });
+			if (needGeo.length) {
+				const ccMap = await lmlGeoBatch(needGeo);
+				out.forEach(function (p) { if (!p.cc) p.cc = ccMap[p.hp.split(":")[0]] || ""; });
+			}
 		} catch (e) { }
 		LML_SOCKS_MEM = { at: now, srcAt: LML_SOCKS_MEM.srcAt || now, list: cands, alive: out };
 		return { success: true, proxies: out, cached: false, tested: testedCount };
@@ -789,7 +823,7 @@ async function lmlGetCountrySocks(env, cc, force) {
 		const inCountry = probeSlice.filter(function (hp) { return ccMap[hp.split(":")[0]] === cc; }).slice(0, 12);
 		const alive = [];
 		for (let i = 0; i < inCountry.length && alive.length < 6; i += 6) {
-			const rs = await Promise.all(inCountry.slice(i, i + 6).map(function (hp) { return lmlSocksAlive(hp, 1800); }));
+			const rs = await Promise.all(inCountry.slice(i, i + 6).map(function (hp) { return lmlSocksAlive(hp, 3200); }));
 			rs.forEach(function (r) { if (r && alive.length < 6) alive.push(r); });
 		}
 		alive.sort(function (a, b) { return a.ms - b.ms; });
@@ -4678,7 +4712,9 @@ rules:
 		// Any other port would produce security=none (plaintext) → keep TLS ports only.
 		const tlsOnlyPorts = ports.filter((p) => TLS_PORTS.has(p));
 		ports = tlsOnlyPorts.length > 0 ? tlsOnlyPorts : ["443"];
-		const fp = user.fingerprint || "chrome";
+		const fpPool = ["chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq"];
+		const fpRawGt = String(user.fingerprint || "chrome").toLowerCase();
+		const fp = (fpRawGt === "random" || fpRawGt === "randomized") ? fpPool[Math.floor(Math.random() * fpPool.length)] : (user.fingerprint || "chrome");
 		const dynPath = encodeURIComponent("/stream/LML_PANEL/" + ((user.uuid || "").split("-")[4] || "default"));
 		const links = [];
 		const m1 = "⚡ LML-CONNECT ❯ [DIRECT-CORE]";
@@ -10577,13 +10613,10 @@ const HTML_TEMPLATES = {
 <h4>۲. تست دامنهٔ خودتان</h4><p>دامنه همین پنل را در اسکنر وارد کنید. فایل Worker جدید باید قبلاً مستقر شده باشد. پس از اسکن، «خروجی JSON برای پنل» بگیرید.</p>
 <h4>۳. ورود و اعمال نتایج</h4><input class="input" type="file" id="lmlScanFile" accept=".json,application/json"><label>حداکثر آی‌پی قابل اعمال<input class="input" id="ipCount" type="number" min="1" max="100" value="10"></label><p id="lmlImportSummary">فایلی انتخاب نشده است.</p><div id="ipLoading" class="scan-log hidden"></div><p>نتایج مربوط به اینترنتِ زمان تست هستند. هنگام اعمال، چرخش تصادفی خاموش می‌شود. سپس فرم کاربر را ذخیره کنید. برای تست مجدد همان آی‌پی‌ها، آن‌ها را در بخش دلخواه اسکنر وارد کنید.</p>
 </div><div class="modal-foot"><button class="btn" data-close-modal="modalIps">بستن</button><button class="btn btn-primary" id="btnApplyIps" disabled>اعمال بهترین‌ها در فرم کاربر</button></div></div></div>
-<div class="modal" id="modalIpRepo"><div class="modal-card"><div class="modal-head"><div class="mh-icon" style="background:var(--accent-soft);color:var(--accent)"><svg><use href="#i-globe"/></svg></div><div class="mh-text"><h3 class="modal-title">مخزن آی‌پی تمیز</h3><p class="modal-sub">رسمی LML • منابع جهانی • تأییدشده‌های ایران — زنده</p></div><button type="button" class="icon-btn" data-close-modal="modalIpRepo"><svg><use href="#i-x"/></svg></button></div><div class="modal-body">
-<h4>📦 مخزن رسمی LML (زنده — دسته‌بندی‌شده)</h4>
-<p id="lmlGhRepoInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت...</p>
-<div id="lmlGhRepoList" class="scan-log" style="max-height:200px;overflow:auto"></div>
-<h4 style="margin-top:12px">🌍 منابع جهانی (کلودفلر — اعتبارسنجی خودکار)</h4>
-<p id="lmlGlobalInfo" style="font-size:12px;color:var(--text-3)"></p>
-<div id="lmlGlobalList" class="scan-log" style="max-height:130px;overflow:auto"></div>
+<div class="modal" id="modalIpRepo"><div class="modal-card"><div class="modal-head"><div class="mh-icon" style="background:var(--accent-soft);color:var(--accent)"><svg><use href="#i-globe"/></svg></div><div class="mh-text"><h3 class="modal-title">مخزن آی‌پی تمیز</h3><p class="modal-sub">منابع جهانی (۱۰۰ آی‌پی زنده) • منبع خارجی • تأییدشده‌های ایران</p></div><button type="button" class="icon-btn" data-close-modal="modalIpRepo"><svg><use href="#i-x"/></svg></button></div><div class="modal-body">
+<h4>🌍 مخزن جهانی آی‌پی تمیز (زنده — ۱۰۰ آی‌پی)</h4>
+<p id="lmlGhRepoInfo" style="font-size:12px;color:var(--text-3)">در حال دریافت مخزن جهانی...</p>
+<div id="lmlGhRepoList" class="scan-log" style="max-height:230px;overflow:auto"></div>
 <h4 style="margin-top:12px">🔗 منبع زندهٔ خارجی (لینک اشتراک دلخواه)</h4>
 <div style="display:flex;gap:8px;margin:6px 0">
 <input class="input" id="lmlExtSourceInput" dir="ltr" placeholder="https://example.com/sub?token=..." style="flex:1;font-size:11.5px">
@@ -10746,7 +10779,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1';
+var CURRENT_VERSION = '1.0.0';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -11943,7 +11976,9 @@ function getvIeesLink(username) {
 	/* TLS-ONLY: keep encrypted (TLS) ports only; never leave the list empty */
 	var tlsOnlyPorts = ports.filter(function (p) { return TLS_PORTS.indexOf(p) >= 0; });
 	ports = tlsOnlyPorts.length ? tlsOnlyPorts : ['443'];
-	var fp = user.fingerprint || 'chrome';
+	var fpPoolP = ['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', '360', 'qq'];
+	var fpRawP = String(user.fingerprint || 'chrome').toLowerCase();
+	var fp = (fpRawP === 'random' || fpRawP === 'randomized') ? fpPoolP[Math.floor(Math.random() * fpPoolP.length)] : (user.fingerprint || 'chrome');
 	var dynPath = encodeURIComponent('/stream/LML_PANEL/' + (user.uuid ? user.uuid.split('-')[4] : 'default'));
 	var links = [];
 	var m1 = decodeURIComponent('%E2%9A%A0%EF%B8%8F%D9%BE%D9%86%D9%84%20%D8%B1%D8%A7%DB%8C%DA%AF%D8%A7%D9%86%20%D9%88%20%D8%BA%DB%8C%D8%B1%20%D9%82%D8%A7%D8%A8%D9%84%20%D9%81%D8%B1%D9%88%D8%B4%E2%9A%A0%EF%B8%8F');
@@ -13146,32 +13181,19 @@ async function lmlLoadGhRepo() {
 	var total = 0;
 	var crowdMap = {};
 	try {
-		info.textContent = 'در حال دریافت مخزن LML...';
+		info.textContent = 'در حال دریافت مخزن جهانی...';
 		var res = await api('/api/ip-repo');
 		var d = await res.json().catch(function () { return {}; });
 		crowdMap = (d && d.crowd) || {};
-		var repo = (d && Array.isArray(d.repo)) ? d.repo : [];
-		var groups = (d && Array.isArray(d.groups)) ? d.groups : [];
 		var glob = (d && Array.isArray(d.global)) ? d.global : [];
 		var ext = (d && Array.isArray(d.ext)) ? d.ext : [];
-		if (groups.length) {
-			info.textContent = 'مخزن رسمی LML — دسته‌بندی‌شده (زنده):';
-			box.innerHTML = groups.map(function (g) {
-				return '<div style="font-weight:800;font-size:11.5px;margin:7px 0 2px;color:var(--accent-text)">' + esc(g.name) + ' (' + g.ips.length + ')</div>' + g.ips.map(repoRow).join('');
-			}).join('');
-			total += groups.reduce(function (acc, g) { return acc + g.ips.length; }, 0);
-		} else if (repo.length) {
-			info.textContent = repo.length + ' آی‌پی در مخزن رسمی LML (زنده):';
-			box.innerHTML = repo.map(repoRow).join('');
-			total += repo.length;
-		} else {
-			info.textContent = 'مخزن رسمی LML خالی است — فایل live-ips.json را در مخزن رسمی ویرایش کنید.';
+		if (!glob.length) {
+			info.textContent = 'مخزن جهانی فعلاً خالی است — لحظاتی دیگر دوباره باز کنید (هر دقیقه از منابع تازه پر می‌شود).';
 			box.innerHTML = '';
-		}
-		var ginfo = $('lmlGlobalInfo'), gbox = $('lmlGlobalList');
-		if (gbox) {
-			if (!glob.length) { if (ginfo) ginfo.textContent = 'منابع جهانی فعلاً در دسترس نیستند.'; gbox.innerHTML = ''; }
-			else { if (ginfo) ginfo.textContent = glob.length + ' آی‌پی از منابع بزرگ جهانی (فقط رنج رسمی کلودفلر، اعتبارسنجی خودکار):'; gbox.innerHTML = glob.map(repoRow).join(''); total += glob.length; }
+		} else {
+			info.textContent = glob.length + ' آی‌پی زنده (منابع بزرگ جهانی + رنج‌های رسمی کلودفلر — هر دقیقه تازه می‌شود):';
+			box.innerHTML = glob.map(repoRow).join('');
+			total += glob.length;
 		}
 		var ebox = $('lmlExtRepoList'), einfo = $('lmlExtSourceStatus'), einp = $('lmlExtSourceInput');
 		if (ebox) {
@@ -16913,7 +16935,9 @@ ${COMMON_TOAST_HTML}
 			var STATUS_TLS_PORTS = ["443", "2053", "2083", "2087", "2096", "8443"];
 			var tlsOnlyPorts = ports.filter(function(p) { return STATUS_TLS_PORTS.indexOf(p) >= 0; });
 			ports = tlsOnlyPorts.length ? tlsOnlyPorts : ["443"];
-			var fp = u.fingerprint || 'chrome';
+			var fpPoolSt = ['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', '360', 'qq'];
+			var fpRawSt = String(u.fingerprint || 'chrome').toLowerCase();
+			var fp = (fpRawSt === 'random' || fpRawSt === 'randomized') ? fpPoolSt[Math.floor(Math.random() * fpPoolSt.length)] : (u.fingerprint || 'chrome');
 			const dynPath = encodeURIComponent("/stream/LML_PANEL/" + (u.uuid ? u.uuid.split("-")[4] : "default"));
 			const links = [];
 			const m1 = decodeURIComponent('%E2%9A%A0%EF%B8%8F%D9%BE%D9%86%D9%84%20%D8%B1%D8%A7%DB%8C%DA%AF%D8%A7%D9%86%20%D9%88%20%D8%BA%DB%8C%D8%B1%20%D9%82%D8%A7%D8%A8%D9%84%20%D9%81%D8%B1%D9%88%D8%B4%E2%9A%A0%EF%B8%8F');
