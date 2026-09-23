@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.0";
+const LML_PANEL_VERSION = "1.0.3";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -476,9 +476,12 @@ async function lmlSaveIpTestResults(results, env) {
 /* تست خودکار پس‌زمینه: هنگام ذخیره کاربر، بدون فشردن هیچ دکمه‌ای */
 async function lmlAutoTestIps(ipsList, env, hostName) {
 	try {
-		const ips = lmlOnlyCfIps(ipsList, 40);
-		if (!ips.length) return;
+		const allIpsT = lmlOnlyCfIps(ipsList, 40);
+		if (!allIpsT.length) return;
 		try { await lmlCfRangesRefresh(); } catch (e) { }
+		/* IP-FREE v1.0.3: فقط آی‌پی‌های رنج کلودفلر پروب می‌شوند — آی‌پی غیرکلودفلری کاربر هرگز «بد» علامت نمی‌خورد و از کانفیگ نمی‌پرد */
+		const ips = allIpsT.filter(function (ip) { return lmlIpInCf(ip); });
+		if (!ips.length) return;
 		const sniHost = await lmlPanelHostResolve(env, hostName);
 		const results = [];
 		const BATCH = 8;
@@ -1877,7 +1880,7 @@ const Router = {
 				}
 				if (mergedSt.length > 0) {
 					const badIpsSt = await lmlGetBadIps(env);
-					badListSt = mergedSt.filter(function (ip) { return !!badIpsSt[ip] && !lmlIpInCf(ip); });
+					badListSt = mergedSt.filter(function (ip) { return !!badIpsSt[ip] && !lmlIpInCf(ip) && ownIpsSt.indexOf(ip) < 0; });
 					let sortedSt = mergedSt;
 					try { sortedSt = lmlCrowdSortForRegion(mergedSt, lmlCrowdRegion(request), await lmlCrowdLoad(env)); } catch (e) { }
 					user.ips = sortedSt.join("\n");
@@ -3882,7 +3885,7 @@ const Router = {
 								...user,
 								ips: finalIps,
 								ips_valid: lmlOnlyCfIps(mergedIps, 40),
-								ip_bad: mergedIps.filter(function (ip) { return !!badIpsApi[ip] && !lmlIpInCf(ip); }),
+								ip_bad: mergedIps.filter(function (ip) { return !!badIpsApi[ip] && !lmlIpInCf(ip) && ownIpsList.indexOf(ip) < 0; }),
 								ip_ssl_checked: true,
 								used_gb: (user.used_gb || 0) + ((GLOBAL_TRAFFIC_CACHE.get(user.username) || 0) / (1024 * 1024 * 1024)),
 								used_req: (user.used_req || 0) + (USER_REQ_CACHE.get(user.username) || 0),
@@ -4702,7 +4705,8 @@ rules:
 		let lmlTlsIps = lmlCleanIps.slice();
 		if (lmlCleanIps.length && env) {
 			const badIpsGt = await lmlGetBadIps(env);
-			lmlTlsIps = lmlCleanIps.filter(function (ip) { return !badIpsGt[ip] || lmlIpInCf(ip); });
+			/* IP-FREE v1.0.3: آی‌پی‌های خود کاربر هرگز حذف نمی‌شوند — حتی اگر قبلاً «بد» علامت خورده باشند */
+			lmlTlsIps = lmlCleanIps.filter(function (ip) { return !badIpsGt[ip] || lmlIpInCf(ip) || parsedUserIps.indexOf(ip) >= 0; });
 			ipCcGt = await lmlGetIpCc(env);
 			if (lmlTlsIps.length > 1 && regionKey) {
 				try { lmlTlsIps = lmlCrowdSortForRegion(lmlTlsIps, regionKey, await lmlCrowdLoad(env)); } catch (e) { }
@@ -10800,7 +10804,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.0';
+var CURRENT_VERSION = '1.0.3';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
