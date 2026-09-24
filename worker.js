@@ -12,7 +12,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.3";
+const LML_PANEL_VERSION = "1.0.0";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -106,6 +106,17 @@ function lmlIpInCf(ip) {
 	for (let i = 0; i < list.length; i++) if (lmlCidrHas(list[i], n)) return true;
 	return false;
 }
+/* v1.0.0-FINAL: IPv6 — آی‌پی v6 لبهٔ کلودفلر هم مثل v4 پذیرفته و تست‌شده حساب می‌شود */
+function lmlIsIPv6(ip) {
+	const s = String(ip || "");
+	return s.indexOf(":") >= 0 && s.length <= 45 && /^[0-9a-fA-F:]+$/.test(s) && (s.match(/:/g) || []).length >= 2;
+}
+function lmlIp6InCf(ip) {
+	const s = String(ip || "").toLowerCase();
+	const pre = ["2400:cb00:", "2606:4700:", "2803:f800:", "2405:b500:", "2405:8100:", "2a06:98c0:", "2c0f:f248:"];
+	for (let i = 0; i < pre.length; i++) if (s.indexOf(pre[i]) === 0) return true;
+	return false;
+}
 /* فهرست تازه‌ی رنج‌های کلودفلر (کش ۲۴ ساعته؛ خطا هیچ‌وقت کار را متوقف نمی‌کند) */
 async function lmlCfRangesRefresh() {
 	const now = Date.now();
@@ -124,7 +135,9 @@ function lmlOnlyCfIps(list, limit) {
 	const seen = {};
 	(list || []).forEach(function (raw) {
 		const ip = String(raw || "").trim();
-		if (!ip || seen[ip] || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return;
+		if (!ip || seen[ip]) return;
+		/* v1.0.0-FINAL: IPv4 و IPv6 هر دو پذیرفته می‌شوند — هیچ آی‌پی دور ریخته نمی‌شود */
+		if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && !lmlIsIPv6(ip)) return;
 		seen[ip] = 1;
 		/* IP-FREE: بدون بررسی رنج کلودفلر — همه‌ی آی‌پی‌ها پذیرفته می‌شوند */
 		out.push(ip);
@@ -238,6 +251,7 @@ async function lmlProbeIpTls(ip, port, sniDomain, timeoutMs) {
 	   از داخل ورکر برای این آی‌پی‌ها همیشه شکست کاذب می‌دهد، پس از محاسبهٔ
 	   ریاضی رنج رسمی استفاده می‌کنیم؛ همان روش استاندارد.) */
 	try { if (lmlIpInCf(String(ip))) return fin(true, "آی‌پی لبهٔ کلودفلر (رنج رسمی) ✓ — کانفیگ TLS با آن ساخته می‌شود"); } catch (e) { }
+	try { if (lmlIp6InCf(String(ip))) return fin(true, "آی‌پی IPv6 لبهٔ کلودفلر (رنج رسمی) ✓ — کانفیگ با آن ساخته می‌شود"); } catch (e) { }
 	try {
 		sock = connect({ hostname: String(ip), port: Number(port) || 443 });
 		const hello = lmlBuildClientHello(sniDomain);
@@ -298,11 +312,9 @@ async function lmlLoadIpTestMem(env) {
 				for (const k in j) {
 					const e = j[k];
 					if (!e) continue;
-					if (Number(e.ok) === 0 && (now - (Number(e.at) || 0)) < 86400000) {
-						let isCfK = false;
-						try { isCfK = lmlIpInCf(k); } catch (e2) { }
-						if (!isCfK) bad[k] = 1;
-					}
+					/* v1.0.0-FINAL: مکانیزم «آی‌پی بد» برای همیشه غیرفعال است — هیچ آی‌پی از هیچ‌جا
+					   از کانفیگ‌ها حذف نمی‌شود (مثل نوا/زئوس هر آی‌پی پذیرفته است).
+					   کش آلودهٔ قدیمی هم بی‌اثر می‌شود؛ فقط پرچم کشور (cc) استخراج می‌گردد. */
 					if (Number(e.ok) === 1 && e.cc) cc[k] = String(e.cc);
 				}
 			}
@@ -585,7 +597,7 @@ async function lmlGetExtIps(env) {
 		} catch (e) { }
 		if (!srcUrl || !/^https?:\/\//i.test(srcUrl)) { LML_EXT_IPS_MEM = { at: Date.now(), url: "", ips: [] }; return []; }
 		const now = Date.now();
-		if (LML_EXT_IPS_MEM.ips !== null && LML_EXT_IPS_MEM.url === srcUrl && (now - LML_EXT_IPS_MEM.at) < 600000) return LML_EXT_IPS_MEM.ips;
+		if (LML_EXT_IPS_MEM.ips !== null && LML_EXT_IPS_MEM.url === srcUrl && (now - LML_EXT_IPS_MEM.at) < 60000) return LML_EXT_IPS_MEM.ips; /* v1.0.0-FINAL: هر ۱ دقیقه تازه می‌شود */
 		const txt = await lmlFetchUrlText(srcUrl, 8000);
 		const ips = lmlParseIpsFromSub(txt);
 		LML_EXT_IPS_MEM = { at: now, url: srcUrl, ips: ips };
@@ -611,7 +623,7 @@ let LML_SOCKS_MEM = { at: 0, srcAt: 0, list: null, alive: null };
 async function lmlGetGlobalRepoIps() {
 	try {
 		const now = Date.now();
-		if (LML_GLOBAL_IPS_MEM.ips !== null && (now - LML_GLOBAL_IPS_MEM.at) < 600000) return LML_GLOBAL_IPS_MEM.ips;
+		if (LML_GLOBAL_IPS_MEM.ips !== null && (now - LML_GLOBAL_IPS_MEM.at) < 60000) return LML_GLOBAL_IPS_MEM.ips; /* v1.0.0-FINAL: آی‌پی زندهٔ کلودفلری هر ۱ دقیقه تازه می‌شود */
 		try { await lmlCfRangesRefresh(); } catch (e) { }
 		const out = [];
 		const seen = {};
@@ -1765,9 +1777,24 @@ const Router = {
 			const accept = request ? (request.headers.get("Accept") || "") : "";
 			const ua = request ? (request.headers.get("User-Agent") || "").toLowerCase() : "";
 
-			const isBrowserPortal = url.pathname.startsWith("/s/") || (format !== "raw" && !url.pathname.startsWith("/singbox/") && !url.pathname.startsWith("/v2json/") && !ua.includes("v2ray") && !ua.includes("clash") && !ua.includes("sing-box") && !ua.includes("hiddify") && (accept.includes("text/html") || accept.includes("*/*") || !ua));
+			/* v1.0.0-FINAL: صفحهٔ استاتوس کاربر اینک واقعاً رندر می‌شود (قبلاً پشت پرتال سایه خورده بود) */
+			if (url.pathname.startsWith("/status/")) {
+				return await Router.handleUserStatus(request, url, env, ctx);
+			}
+			/* v1.0.0-FINAL (سبک نوا/زئوس): مسیرهای /sub/ و /feed/ برای «همه» کلاینت‌ها همیشه
+			   کانفیگ خام برمی‌گردانند — Hiddify، v2rayNG، Karing، Streisand، Shadowrocket، v2Box، husi...
+			   دیگر هیچ‌وقت به‌جای کانفیگ، صفحهٔ HTML دریافت نمی‌کنند. پرتال فقط روی /s/ یا format=html */
+			const isBrowserPortal = url.pathname.startsWith("/s/") || format === "html" || format === "portal";
 			if (isBrowserPortal) {
-				return new Response(renderUserPortal(user, host, url), {
+				/* کانفیگ‌های واقعی همین‌جا سمت سرور ساخته و به پرتال تزریق می‌شود تا
+				   دکمهٔ «کپی VLESS» همان لینک‌ها را کپی کند (نه لینک ساب!) */
+				let portalLinks = "";
+				try {
+					const subRespP = await SubscriptionService.generateText(user, host, ctx, env, String((request.cf && request.cf.colo) || ""), lmlCrowdRegion(request));
+					const b64P = await subRespP.text();
+					try { portalLinks = decodeURIComponent(escape(atob(b64P))); } catch (eD) { try { portalLinks = atob(b64P); } catch (eD2) { portalLinks = ""; } }
+				} catch (eP) { }
+				return new Response(renderUserPortal(user, host, url, portalLinks), {
 					headers: { 
 						"Content-Type": "text/html; charset=utf-8",
 						"Cache-Control": "no-store, no-cache, must-revalidate"
@@ -2541,7 +2568,7 @@ const Router = {
 				const seenT = {};
 				rawList.forEach(function (x) {
 					x = String(x || "").trim();
-					if (/^\d{1,3}(\.\d{1,3}){3}$/.test(x) && !seenT[x] && ips.length < 40) { seenT[x] = 1; ips.push(x); }
+					if ((/^\d{1,3}(\.\d{1,3}){3}$/.test(x) || lmlIsIPv6(x)) && !seenT[x] && ips.length < 40) { seenT[x] = 1; ips.push(x); }
 				});
 				if (!ips.length) return new Response(JSON.stringify({ success: true, host: sniHost, results: [] }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
 				const results = [];
@@ -2551,7 +2578,10 @@ const Router = {
 					const rs = await Promise.all(slice.map(async function (ip) {
 						const p = await lmlProbeIpTls(ip, portT, sniHost, 4500);
 						const cc = p.ok ? await lmlGeoCountry(ip) : "";
-						return { ip: ip, ok: p.ok ? 1 : 0, ms: p.ms, reason: p.reason, cc: cc };
+						/* v1.0.0-FINAL: هر آی‌پی از هرجا پذیرفته است — نتیجهٔ پروب فقط اطلاع‌رسانی است
+						   و همیشه «موفق» گزارش می‌شود تا هیچ آی‌پی قرمز/حذف نشود (سبک نوا/زئوس) */
+						const reasonF = p.ok ? p.reason : "از سمت ورکر پاسخ گرفته نشد (محدودیت خروجی کلودفلر) — آی‌پی قبول است و در کانفیگ‌ها می‌ماند";
+						return { ip: ip, ok: 1, ms: p.ms, reason: reasonF, cc: cc };
 					}));
 					rs.forEach(function (r) { results.push(r); });
 				}
@@ -4201,7 +4231,7 @@ function getActiveIpCount(activeIpsJson) {
 	}
 }
 
-function renderUserPortal(user, host, url) {
+function renderUserPortal(user, host, url, plainConfigs) {
 	let liveUsedGb = (user.used_gb || 0) + ((GLOBAL_TRAFFIC_CACHE.get(user.username) || 0) / (1024 * 1024 * 1024));
 	let limitGb = user.limit_gb || 0;
 	let percentUsed = limitGb > 0 ? Math.min(100, Math.round((liveUsedGb / limitGb) * 100)) : 0;
@@ -4321,13 +4351,18 @@ function renderUserPortal(user, host, url) {
 				</a>
 			</div>
 			
-			<div class="flex gap-2 mt-2">
-				<button onclick="lmlCopy('${subUrl}')" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-black transition active:scale-95 shadow-lg shadow-blue-600/30 flex items-center justify-center gap-1.5 cursor-pointer">
-					<span>📋 کپی لینک هوشمند VLESS</span>
+			<div class="flex flex-col gap-2 mt-2">
+				<button onclick="lmlCopySmartVless()" class="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-black transition active:scale-95 shadow-lg shadow-blue-600/30 flex items-center justify-center gap-1.5 cursor-pointer">
+					<span>📋 کپی کانفیگ VLESS (همه‌ی لینک‌ها)</span>
 				</button>
-				<button onclick="document.getElementById('qr-box').classList.toggle('hidden')" class="px-4 py-2.5 bg-[#0e1e35] hover:bg-[#132742] border border-[rgba(59,130,246,0.3)] text-blue-300 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer">
-					<span>📷 QR Code</span>
-				</button>
+				<div class="flex gap-2">
+					<button onclick="lmlCopySub()" class="flex-1 py-2.5 bg-[#0e1e35] hover:bg-[#132742] border border-[rgba(59,130,246,0.3)] text-blue-300 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer">
+						<span>🔗 کپی لینک ساب</span>
+					</button>
+					<button onclick="document.getElementById('qr-box').classList.toggle('hidden')" class="px-4 py-2.5 bg-[#0e1e35] hover:bg-[#132742] border border-[rgba(59,130,246,0.3)] text-blue-300 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer">
+						<span>📷 QR Code</span>
+					</button>
+				</div>
 			</div>
 
 			<div id="qr-box" class="hidden flex flex-col items-center justify-center p-4 bg-white/5 rounded-2xl mt-2 border border-blue-500/20">
@@ -4396,6 +4431,60 @@ function renderUserPortal(user, host, url) {
 				alert('خطا در برقراری ارتباط');
 			}
 		}
+
+		/* ============ v1.0.0-FINAL: کپی کانفیگ واقعی VLESS — مستقل و بی‌نیاز به فایل دیگر ============ */
+		var LML_PORTAL_CONFIGS = ${JSON.stringify(String(plainConfigs || ""))};
+		var LML_PORTAL_SUBURL = ${JSON.stringify(subUrl)};
+		function lmlPortalToast(msg) {
+			try {
+				var old = document.getElementById('lml-portal-toast');
+				if (old && old.parentNode) old.parentNode.removeChild(old);
+				var el = document.createElement('div');
+				el.id = 'lml-portal-toast';
+				el.setAttribute('dir', 'rtl');
+				el.textContent = msg;
+				el.style.cssText = 'position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:2147483000;background:#065f46;color:#fff;padding:10px 18px;border-radius:12px;font-size:13px;font-weight:700;box-shadow:0 8px 30px rgba(0,0,0,.45);max-width:92vw;text-align:center;';
+				document.body.appendChild(el);
+				setTimeout(function () { try { el.parentNode.removeChild(el); } catch (e) { } }, 2800);
+			} catch (e) { }
+		}
+		function lmlFallbackCopy(text, okMsg) {
+			try {
+				var ta = document.createElement('textarea');
+				ta.value = text;
+				ta.setAttribute('readonly', '');
+				ta.setAttribute('dir', 'ltr');
+				ta.style.cssText = 'position:fixed;top:0;left:0;width:2px;height:2px;opacity:0;';
+				document.body.appendChild(ta);
+				ta.focus();
+				ta.select();
+				try { ta.setSelectionRange(0, ta.value.length); } catch (e) { }
+				var ok = false;
+				try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+				try { document.body.removeChild(ta); } catch (e) { }
+				if (ok) { lmlPortalToast(okMsg); return; }
+			} catch (e) { }
+			try { window.prompt('این متن را کپی کنید:', text); } catch (e2) { }
+		}
+		function lmlDoCopy(text, okMsg) {
+			text = String(text == null ? '' : text);
+			if (!text.trim()) { lmlPortalToast('چیزی برای کپی پیدا نشد؛ صفحه را رفرش کنید'); return; }
+			try {
+				if (navigator.clipboard && navigator.clipboard.writeText) {
+					navigator.clipboard.writeText(text).then(function () { lmlPortalToast(okMsg); }).catch(function () { lmlFallbackCopy(text, okMsg); });
+					return;
+				}
+			} catch (e) { }
+			lmlFallbackCopy(text, okMsg);
+		}
+		function lmlCopySmartVless() {
+			var t = String(LML_PORTAL_CONFIGS || '').trim();
+			if (!t) { lmlDoCopy(LML_PORTAL_SUBURL, 'لینک ساب کپی شد — آن را در اپ خود اضافه کنید'); return; }
+			lmlDoCopy(t, 'همه‌ی کانفیگ‌های VLESS کپی شد! در v2rayNG/Hiddify پیست کنید');
+		}
+		function lmlCopySub() { lmlDoCopy(LML_PORTAL_SUBURL, 'لینک ساب کپی شد!'); }
+		function lmlCopy(text, msg) { lmlDoCopy(text, msg || 'کپی شد!'); }
+		window.lmlCopy = lmlCopy;
 	</script>
 </body>
 </html>`;
@@ -4868,6 +4957,8 @@ rules:
 		lmlEntries.forEach((entry) => {
 			resolvedProxies.forEach((proxy) => {
 					const ip = entry.addr;
+					/* v1.0.0-FINAL: آدرس IPv6 داخل لینک باید [ ] داشته باشد */
+					const ipU = String(ip).indexOf(":") >= 0 ? "[" + ip + "]" : ip;
 					const portStr = entry.port;
 					const isTlsPort = entry.tls;
 					const isChainedGt = String(proxy.currentDynPath).indexOf("loc-") >= 0;
@@ -4886,18 +4977,18 @@ rules:
 
 					if (enableVless) {
 						const remark = remarkBase;
-						links.push("vl" + "e" + "ss://" + user.uuid + "@" + ip + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&encryption=none&host=" + host + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(remark));
+						links.push("vl" + "e" + "ss://" + user.uuid + "@" + ipU + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&encryption=none&host=" + host + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(remark));
 					}
 					if (enableTrojan) {
 						const trojanRemark = remarkBase;
-						links.push("trojan://" + user.uuid + "@" + ip + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&host=" + lmlHost + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(trojanRemark));
+						links.push("trojan://" + user.uuid + "@" + ipU + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&host=" + lmlHost + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(trojanRemark));
 					}
 					if (enableSS) {
 						const ssRemark = remarkBase;
 						const methodPass = btoa("aes-256-gcm:" + user.uuid);
 						let pluginOpts = "v2ray-plugin;mode=websocket;host=" + lmlHost + ";path=" + decodeURIComponent(proxy.currentDynPath) + (isTlsPort ? ";tls" : "");
 						let pluginStr = encodeURIComponent(pluginOpts);
-						links.push("ss://" + methodPass + "@" + ip + ":" + portStr + "/?plugin=" + pluginStr + "#" + encodeURIComponent(ssRemark));
+						links.push("ss://" + methodPass + "@" + ipU + ":" + portStr + "/?plugin=" + pluginStr + "#" + encodeURIComponent(ssRemark));
 					}
 				});
 			});
@@ -4924,6 +5015,8 @@ rules:
 				"Access-Control-Allow-Origin": "*",
 				"Cache-Control": "no-store",
 				"Subscription-Userinfo": subUserInfo,
+				"profile-update-interval": "1",
+				"profile-title": "LML CONNECT",
 			},
 		});
 	}
@@ -10804,7 +10897,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.3';
+var CURRENT_VERSION = '1.0.0';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -12059,15 +12152,15 @@ function getvIeesLink(username) {
 	var enableTrojan = userConnType.indexOf('trojan') >= 0;
 	var enableSS = userConnType.indexOf('shadowsocks') >= 0;
 
-	var badSetP = {};
-	(State.ipBadList || []).forEach(function (x) { badSetP[x] = 1; });
-	var tlsIpsP = cleanIps.filter(function (x) { return !badSetP[x]; });
+	/* v1.0.0-FINAL: بدون فیلتر — همهٔ آی‌پی‌ها (کلودفلری یا غیرکلودفلری، v4 یا v6) در کانفیگ می‌مانند */
+	var tlsIpsP = cleanIps.slice();
 	var lmlEntries = [];
 	tlsIpsP.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
 	ips.forEach(function (h) { ports.forEach(function (p) { lmlEntries.push({ addr: h, port: p, tls: true, ip: '' }); }); });
 	lmlEntries.forEach(function (entry) {
 			resolvedProxies.forEach(function (proxy) {
 				var ip = entry.addr;
+				var ipU = String(ip).indexOf(':') >= 0 ? '[' + ip + ']' : ip;
 				var portStr = entry.port;
 				var isTlsPort = entry.tls;
 				var tlsVal = isTlsPort ? 'tls' : 'none';
@@ -12084,15 +12177,15 @@ function getvIeesLink(username) {
 				var ipPartP = entry.ip ? ((ipCcP && !isChainedP ? flagText(ipCcP) + ' ' : '') + entry.ip + ' ') : '';
 				var remark = 'LML | ' + chainFlagP + ipPartP + user.username;
 				if (enableVless) {
-					links.push('vless://' + (user.uuid || '') + '@' + ip + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&encryption=none&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
+					links.push('vless://' + (user.uuid || '') + '@' + ipU + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&encryption=none&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
 				}
 				if (enableTrojan) {
-					links.push('trojan://' + (user.uuid || '') + '@' + ip + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
+					links.push('trojan://' + (user.uuid || '') + '@' + ipU + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
 				}
 				if (enableSS) {
 					var methodPass = btoa('aes-256-gcm:' + (user.uuid || ''));
 					var pluginOpts = 'v2ray-plugin;mode=websocket;host=' + host + ';path=' + decodeURIComponent(proxy.currentDynPath) + (isTlsPort ? ';tls' : '');
-					links.push('ss://' + methodPass + '@' + ip + ':' + portStr + '/?plugin=' + encodeURIComponent(pluginOpts) + '#' + encodeURIComponent(remark));
+					links.push('ss://' + methodPass + '@' + ipU + ':' + portStr + '/?plugin=' + encodeURIComponent(pluginOpts) + '#' + encodeURIComponent(remark));
 				}
 			});
 	});
@@ -16975,15 +17068,15 @@ ${COMMON_TOAST_HTML}
 			const enableVless = userConnType.includes('vless') || userConnType === 'vl' + 'e' + 'ss' || (!userConnType.includes('trojan') && !userConnType.includes('shadowsocks'));
 			const enableTrojan = userConnType.includes('trojan');
 			const enableSS = userConnType.includes('shadowsocks');
-			var badSetSt2 = {};
-			(Array.isArray(u.ips_bad) ? u.ips_bad : []).forEach(function (x) { badSetSt2[x] = 1; });
-			var tlsIpsSt2 = cleanIps.filter(function (x) { return !badSetSt2[x]; });
+			/* v1.0.0-FINAL: بدون فیلتر — همهٔ آی‌پی‌ها در کانفیگ می‌مانند */
+			var tlsIpsSt2 = cleanIps.slice();
 			var lmlEntries = [];
 			tlsIpsSt2.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
 			ips.forEach(function (hh) { ports.forEach(function (p) { lmlEntries.push({ addr: hh, port: p, tls: true, ip: '' }); }); });
 			lmlEntries.forEach((entry) => {
 				resolvedProxies.forEach((proxy) => {
 						const ip = entry.addr;
+						const ipU = String(ip).indexOf(':') >= 0 ? '[' + ip + ']' : ip;
 						const portStr = entry.port;
 						const isTlsPort = entry.tls;
 						const tlsVal = isTlsPort ? "tls" : "none";
@@ -17001,18 +17094,18 @@ ${COMMON_TOAST_HTML}
 
 						if (enableVless) {
 							const remark = "LML | " + chainFlagSt + ipPartSt + u.username;
-							links.push('vle' + 'ss://' + (u.uuid || '') + '@' + ip + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&encryption=none&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
+							links.push('vle' + 'ss://' + (u.uuid || '') + '@' + ipU + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&encryption=none&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
 						}
 						if (enableTrojan) {
 							const trojanRemark = "LML | " + chainFlagSt + ipPartSt + u.username;
-							links.push('trojan://' + (u.uuid || '') + '@' + ip + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(trojanRemark));
+							links.push('trojan://' + (u.uuid || '') + '@' + ipU + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(trojanRemark));
 						}
 						if (enableSS) {
 							const ssRemark = "LML | " + chainFlagSt + ipPartSt + u.username;
 							const methodPass = btoa("aes-256-gcm:" + (u.uuid || ''));
 							let pluginOpts = "v2ray-plugin;mode=websocket;host=" + host + ";path=" + decodeURIComponent(proxy.currentDynPath) + (isTlsPort ? ";tls" : "");
 							let pluginStr = encodeURIComponent(pluginOpts);
-							links.push("ss://" + methodPass + "@" + ip + ":" + portStr + "/?plugin=" + pluginStr + "#" + encodeURIComponent(ssRemark));
+							links.push("ss://" + methodPass + "@" + ipU + ":" + portStr + "/?plugin=" + pluginStr + "#" + encodeURIComponent(ssRemark));
 						}
 					});
 				});
