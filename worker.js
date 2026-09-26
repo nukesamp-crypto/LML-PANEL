@@ -1,5 +1,5 @@
 import { connect } from "cloudflare:sockets";
-const LML_SCANNER_RELEASE = {"version": "1.0.1", "build": "scan-target-20260926", "notes": ["🎯 اسکنر هدف‌محور: عدد هدف (مثلاً ۶۰) را کامل پیدا می‌کند — دسته‌دسته می‌گردد تا تعداد درخواستی آی‌پی تمیز جور شود","🔔 آپدیت فقط با اعلان و تأیید شما (آپدیت مخفی حذف شد)","🚀 اسکنر غول مرورگری با پراکندگی جهانی از همهٔ کشورها + 🫀 پایش زندهٔ آی‌پی‌ها","📉 ساب کم‌مصرف: ۴ آی‌پی برتر × ۲ پورت + دامنه؛ بروزرسانی کلاینت هر ۶ ساعت","⚡ ساخت سریع = قوی‌ترین کانفیگ + طراحی جدید صفحه رمز عبور + داشبورد بدون کارت نمایندگان"]};
+const LML_SCANNER_RELEASE = {"version": "1.0.1", "build": "exit-flag-20260926", "notes": ["📍 پرچم خروجی واقعی: ریمارک کانفیگ‌ها و صفحهٔ کاربر حالا کشور دیتاسنتر کلودفلر (خروجی واقعی تو) را نشان می‌دهد — نه محل ثبت آی‌پی Anycast (آمریکا) که گمراه‌کننده بود","🎯 اسکنر هدف‌محور — تعداد آی‌پی تمیز درخواستی را کامل پیدا می‌کند","🔔 آپدیت فقط با اعلان و تأیید مدیر","🚀 اسکنر غول با پراکندگی جهانی + 🫀 پایش زندهٔ آی‌پی‌ها","📉 ساب کم‌مصرف + ⚡ ساخت سریع قوی‌ترین کانفیگ + طراحی جدید صفحه رمز عبور"]};
 
 function safeWaitUntil(ctx, promise) {
 	if (ctx && typeof ctx.waitUntil === "function") {
@@ -2004,6 +2004,9 @@ const Router = {
 				ips: user.ips,
 				ips_bad: badListSt,
 				crowd_ips: crowdSampleSt,
+				colo: String((request.cf && request.cf.colo) || ""),
+				colo_cc: lmlColoCountry(String((request.cf && request.cf.colo) || "")),
+				colo_flag: lmlFlagEmoji(lmlColoCountry(String((request.cf && request.cf.colo) || ""))),
 				fingerprint: user.fingerprint || "chrome",
 				connection_type: user.connection_type || "vless",
 				user_proxy_iata: user.user_proxy_iata,
@@ -5088,8 +5091,12 @@ rules:
 					const isTlsPort = entry.tls;
 					const isChainedGt = String(proxy.currentDynPath).indexOf("loc-") >= 0;
 					const chainFlagGt = (isChainedGt && proxy.flagEmoji && proxy.flagEmoji !== "🌐") ? (proxy.flagEmoji + " ") : "";
-					const ipPartGt = entry.ip ? ((ipCcGt[entry.ip] && !isChainedGt ? lmlFlagEmoji(ipCcGt[entry.ip]) + " " : "") + entry.ip + " ") : "";
-					const remarkBase = "LML | " + chainFlagGt + ipPartGt + user.username;
+					/* v1.0.1 EXIT-FLAG: پرچم «خروجی واقعی» — زنجیره‌ای = کشور پروکسی خروجی،
+					   مستقیم = کشور دیتاسنتر (colocloudflare) که ترافیک واقعاً از آنجا خارج می‌شود.
+					   کشور ثبتی خود آی‌پی (که برای Anycast کلودفلر تقریباً همیشه آمریکاست و گمراه‌کننده بود) حذف شد. */
+					const exitFlagGt = isChainedGt ? chainFlagGt : lmlIpFlag;
+					const ipPartGt = entry.ip ? (entry.ip + " ") : "";
+					const remarkBase = "LML | " + exitFlagGt + ipPartGt + user.username;
 					const tlsVal = isTlsPort ? "tls" : "none";
 					let userFrag = "";
 					if (user.frag_len && user.frag_int) userFrag += "&fragment=" + encodeURIComponent(user.frag_len + "," + user.frag_int + (isTlsPort ? ",tlshello" : ""));
@@ -11211,7 +11218,7 @@ const HTML_TEMPLATES = {
 
 <div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.1 • همه‌چیز داخل پنل — بدون ابزار ترمینال</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
 <h4 style="margin-top:2px">🚀 اسکنر غول — شکارچی لبهٔ کلودفلر (روی اینترنت خودتان)</h4>
-<div class="note"><svg><use href="#i-info"/></svg><div>بدون نیاز به هیچ ابزار اضافه — موتور <b>همین‌جا در مرورگر، روی نت خودتان</b> اجرا می‌شود: نامزدها از مخزن غول پنل + رنج‌های زندهٔ کلودفلر (رسمی، جدید و BGP جهانی) جمع می‌شوند، و بعد <b>دسته‌دسته تا رسیدن به عدد هدف شما</b> (مثلاً دقیقاً ۶۰ آی‌پی تمیز) به جست‌وجو ادامه می‌دهد؛ هر آی‌پی با <b>بازآزمون دقیق ۳ دوره</b> تأیید می‌شود. معیار تمیزی: کامل‌شدن handshake (خطا از جنس گواهی = لبه جواب داده)، نه timeouts و نه RST اپراتور. ✅</div></div>
+<div class="note"><svg><use href="#i-info"/></svg><div>بدون نیاز به هیچ ابزار اضافه — موتور <b>همین‌جا در مرورگر، روی نت خودتان</b> اجرا می‌شود: نامزدها از مخزن غول پنل + رنج‌های زندهٔ کلودفلر (رسمی، جدید و BGP جهانی) جمع می‌شوند، و بعد <b>دسته‌دسته تا رسیدن به عدد هدف شما</b> (مثلاً دقیقاً ۶۰ آی‌پی تمیز) به جست‌وجو ادامه می‌دهد؛ هر آی‌پی با <b>بازآزمون دقیق ۳ دوره</b> تأیید می‌شود. معیار تمیزی: کامل‌شدن handshake (خطا از جنس گواهی = لبه جواب داده)، نه timeouts و نه RST اپراتور. ✅ پرچم نتایج = <b>محل ثبت آی‌پی</b> (آی‌پی Anycast کلودفلر معمولاً آمریکا ثبت شده) — <b>خروجی واقعی اتصال</b>، نزدیک‌ترین دیتاسنتر کلودفلر به توست که در صفحهٔ کاربر و ریمارک کانفیگ نشان داده می‌شود.</div></div>
 <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0;font-size:12px">
 	<label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="gsSrcRepo" checked> مخزن غول پنل</label>
 	<label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="gsSrcRanges" checked> رنج‌های زندهٔ کلودفلر</label>
@@ -17705,6 +17712,7 @@ reseller: `<!DOCTYPE html>
 			<h1 class="text-xl font-bold tracking-tight text-gray-900 dark:text-white mb-1">LML PANEL - وضعیت اشتراک</h1>
 			<p id="display-username" class="text-sm font-bold text-blue-500 tracking-wide font-mono mb-2"></p>
 			<p id="display-flag" class="text-2xl font-bold tracking-wide mb-3" style="display:none;"></p>
+			<p id="display-exit" class="text-[11px] font-bold text-zinc-500 dark:text-zinc-400 mb-3" style="display:none;" dir="rtl"></p>
 			<div id="live-connections-badge" style="display: none !important;">
 				<span class="w-2 h-2 rounded-full bg-green-600 animate-pulse"></span>
 				<span id="live-connections-text" dir="rtl">۰ دستگاه متصل</span>
@@ -17943,6 +17951,7 @@ ${COMMON_TOAST_HTML}
 						const isChainedSt = String(proxy.currentDynPath).indexOf("loc-") >= 0;
 						const chainFlagSt = (isChainedSt && proxy.flagEmoji && proxy.flagEmoji !== "🌐") ? (proxy.flagEmoji + " ") : "";
 						const ipPartSt = entry.ip ? (entry.ip + " ") : "";
+						const exitFlagSt = isChainedSt ? chainFlagSt : (u.colo_flag ? u.colo_flag + ' ' : '');
 						let userFrag = "";
 						if (u.frag_len && u.frag_int) userFrag += "&fragment=" + encodeURIComponent(u.frag_len + "," + u.frag_int + (isTlsPort ? ",tlshello" : ""));
 						if (u.advanced_frag) userFrag += "&fm=" + encodeURIComponent(u.advanced_frag);
@@ -17953,15 +17962,15 @@ ${COMMON_TOAST_HTML}
 						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host) : "";
 
 						if (enableVless) {
-							const remark = "LML | " + chainFlagSt + ipPartSt + u.username;
+							const remark = "LML | " + exitFlagSt + ipPartSt + u.username;
 							links.push('vle' + 'ss://' + (u.uuid || '') + '@' + ipU + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&encryption=none&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
 						}
 						if (enableTrojan) {
-							const trojanRemark = "LML | " + chainFlagSt + ipPartSt + u.username;
+							const trojanRemark = "LML | " + exitFlagSt + ipPartSt + u.username;
 							links.push('trojan://' + (u.uuid || '') + '@' + ipU + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(trojanRemark));
 						}
 						if (enableSS) {
-							const ssRemark = "LML | " + chainFlagSt + ipPartSt + u.username;
+							const ssRemark = "LML | " + exitFlagSt + ipPartSt + u.username;
 							const methodPass = btoa("aes-256-gcm:" + (u.uuid || ''));
 							let pluginOpts = "v2ray-plugin;mode=websocket;host=" + host + ";path=" + decodeURIComponent(proxy.currentDynPath) + (isTlsPort ? ";tls" : "");
 							let pluginStr = encodeURIComponent(pluginOpts);
@@ -18073,6 +18082,15 @@ ${COMMON_TOAST_HTML}
 			if (!u) return;
 			const limit = u.ip_limit !== undefined ? u.ip_limit : u.max_connections;
 			document.getElementById('display-username').innerText = u.username;
+			try {
+				if (u.colo_cc) {
+					var exEl = document.getElementById('display-exit');
+					if (exEl) {
+						exEl.innerHTML = '📍 خروجی واقعی اینترنت تو: ' + (u.colo_flag || '🌐') + ' ' + u.colo_cc + (u.colo ? ' — دیتاسنتر کلودفلر ' + u.colo : '') + ' (نزدیک‌ترین به تو)';
+						exEl.style.display = 'block';
+					}
+				}
+			} catch (e) { }
 const flagContainer = document.getElementById('display-flag');
 	if (u.user_proxy_iata) {
 		const flag = getFlagEmoji(u.user_proxy_iata);
