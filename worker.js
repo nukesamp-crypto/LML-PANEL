@@ -1,5 +1,5 @@
 import { connect } from "cloudflare:sockets";
-const LML_SCANNER_RELEASE = {"version": "1.0.2", "build": "notify-update-20260926", "notes": ["🔕→🔔 آپدیت مخفی حذف شد — پنل حالا نسخهٔ جدید را با اعلان نشان می‌دهد و فقط با تأیید شما آپدیت می‌کند","🚀 اسکنر غول مرورگری با پراکندگی جهانی از همهٔ کشورها (بدون ابزار ترمینال)","🫀 پایش زندهٔ آی‌پی‌ها — چک مداوم هر ۱ تا ۶۰ ثانیه و گزارش خودکار آی‌پی‌های مرده","📉 ساب کم‌مصرف: حداکثر ۴ آی‌پی برتر × ۲ پورت + دامنه، بروزرسانی کلاینت هر ۶ ساعت","⚡ ساخت سریع = قوی‌ترین کانفیگ (تک‌پورت ۴۴۳) + طراحی جدید صفحه ساخت رمز عبور"]};
+const LML_SCANNER_RELEASE = {"version": "1.0.1", "build": "scan-target-20260926", "notes": ["🎯 اسکنر هدف‌محور: عدد هدف (مثلاً ۶۰) را کامل پیدا می‌کند — دسته‌دسته می‌گردد تا تعداد درخواستی آی‌پی تمیز جور شود","🔔 آپدیت فقط با اعلان و تأیید شما (آپدیت مخفی حذف شد)","🚀 اسکنر غول مرورگری با پراکندگی جهانی از همهٔ کشورها + 🫀 پایش زندهٔ آی‌پی‌ها","📉 ساب کم‌مصرف: ۴ آی‌پی برتر × ۲ پورت + دامنه؛ بروزرسانی کلاینت هر ۶ ساعت","⚡ ساخت سریع = قوی‌ترین کانفیگ + طراحی جدید صفحه رمز عبور + داشبورد بدون کارت نمایندگان"]};
 
 function safeWaitUntil(ctx, promise) {
 	if (ctx && typeof ctx.waitUntil === "function") {
@@ -11,7 +11,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.2";
+const LML_PANEL_VERSION = "1.0.1";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -11211,14 +11211,14 @@ const HTML_TEMPLATES = {
 
 <div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.1 • همه‌چیز داخل پنل — بدون ابزار ترمینال</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
 <h4 style="margin-top:2px">🚀 اسکنر غول — شکارچی لبهٔ کلودفلر (روی اینترنت خودتان)</h4>
-<div class="note"><svg><use href="#i-info"/></svg><div>بدون نیاز به هیچ ابزار اضافه — موتور <b>همین‌جا در مرورگر، روی نت خودتان</b> اجرا می‌شود: نامزدها از مخزن غول پنل + رنج‌های زندهٔ کلودفلر (رسمی، جدید و BGP جهانی) جمع می‌شوند، سپس در <b>دو مرحله</b> (جاروی سریع + بازآزمون دقیق ۳ دوره) آی‌پی‌هایی که اپراتور شما <b>فیلتر نکرده</b> و TLS را تا لبهٔ کلودفلر کامل می‌کنند شناسایی می‌شوند. معیار تمیزی: کامل‌شدن handshake (خطا از جنس گواهی = لبه جواب داده)، نه timeouts و نه RST اپراتور. ✅</div></div>
+<div class="note"><svg><use href="#i-info"/></svg><div>بدون نیاز به هیچ ابزار اضافه — موتور <b>همین‌جا در مرورگر، روی نت خودتان</b> اجرا می‌شود: نامزدها از مخزن غول پنل + رنج‌های زندهٔ کلودفلر (رسمی، جدید و BGP جهانی) جمع می‌شوند، و بعد <b>دسته‌دسته تا رسیدن به عدد هدف شما</b> (مثلاً دقیقاً ۶۰ آی‌پی تمیز) به جست‌وجو ادامه می‌دهد؛ هر آی‌پی با <b>بازآزمون دقیق ۳ دوره</b> تأیید می‌شود. معیار تمیزی: کامل‌شدن handshake (خطا از جنس گواهی = لبه جواب داده)، نه timeouts و نه RST اپراتور. ✅</div></div>
 <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0;font-size:12px">
 	<label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="gsSrcRepo" checked> مخزن غول پنل</label>
 	<label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="gsSrcRanges" checked> رنج‌های زندهٔ کلودفلر</label>
 	<label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="gsSrcManual"> لیست دستی</label>
 	<label style="display:flex;gap:5px;align-items:center;cursor:pointer" title="نامزدها به‌جای یک منطقه، از همهٔ کشورهای جهان round-robin انتخاب می‌شوند"><input type="checkbox" id="gsSrcGlobal" checked> 🌍 پراکندگی جهانی (همهٔ کشورها)</label>
-	<label style="display:flex;gap:5px;align-items:center">تعداد نامزد
-	<select class="select" id="gsCount" style="min-width:110px"><option value="60">۶۰ (سریع)</option><option value="150" selected>۱۵۰ (متعادل)</option><option value="300">۳۰۰ (غول)</option><option value="500">۵۰۰ (فوق)</option></select></label>
+	<label style="display:flex;gap:5px;align-items:center">🎯 هدف (تعداد آی‌پی تمیز)
+	<select class="select" id="gsCount" style="min-width:150px"><option value="60" selected>۶۰ آی‌پی تمیز</option><option value="150">۱۵۰ آی‌پی تمیز</option><option value="300">۳۰۰ آی‌پی تمیز</option><option value="500">۵۰۰ آی‌پی تمیز</option></select></label>
 </div>
 <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:4px 0;font-size:12px">
 	<span style="font-weight:700">پورت‌ها:</span>
@@ -11419,7 +11419,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.2';
+var CURRENT_VERSION = '1.0.1';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -13929,7 +13929,7 @@ function gsRender() {
 	arr.forEach(function (r) { if (r.ok) clean++; });
 	var pct = GS.total ? Math.min(100, Math.round((GS.done / Math.max(1, GS.total)) * 100)) : 0;
 	var bar = gsEl('gsBar'); if (bar) bar.style.width = pct + '%';
-	if (GS.running) gsSetStats('مرحله ' + (GS.stage || 1) + ' • بررسی‌شده: ' + GS.done + (GS.total ? ' از ' + GS.total : '') + ' پروب • تمیز تا اینجا: ' + clean + ' • پایهٔ نت شما: ' + GS.baseline + 'ms');
+	if (GS.running) gsSetStats('🎯 هدف: ' + (GS.wantClean || '—') + ' تمیز • یافته: ' + clean + ' • پروب: ' + GS.done + (GS.total ? ' از ' + GS.total : '') + ' • پایهٔ نت: ' + GS.baseline + 'ms');
 	var box = gsEl('gsResults'); if (!box) return;
 	var html = '';
 	var shown = arr.slice(0, 150);
@@ -13951,70 +13951,84 @@ async function gsStartScan() {
 	if (GS.running) return;
 	var ports = $$('.gs-port').filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
 	if (!ports.length) { toast('حداقل یک پورت انتخاب کنید.', 'warn'); return; }
-	var want = Math.min(500, Math.max(20, parseInt(vval('gsCount'), 10) || 150));
+	/* 🎯 عدد انتخابی = تعداد آی‌پی تمیزی که «کامل» می‌خواهی (مثلاً دقیقاً ۶۰ تا) */
+	var wantClean = Math.min(500, Math.max(1, parseInt(vval('gsCount'), 10) || 60));
 	var useRepo = gsEl('gsSrcRepo').checked, useRanges = gsEl('gsSrcRanges').checked, useManual = gsEl('gsSrcManual').checked;
 	if (!useRepo && !useRanges && !useManual) { toast('حداقل یک منبع نامزد را انتخاب کنید.', 'warn'); return; }
-	GS.running = true; GS.stop = false; GS.rows = {}; GS.done = 0; GS.total = 0; GS.flags = {}; GS.t0 = Date.now(); GS.stage = 1;
+	GS.running = true; GS.stop = false; GS.rows = {}; GS.done = 0; GS.total = 0; GS.flags = {}; GS.t0 = Date.now(); GS.stage = 1; GS.wantClean = wantClean;
 	gsEl('gsStart').disabled = true; gsEl('gsStop').disabled = false;
 	gsEl('gsApplyTop').disabled = true; gsEl('gsExportJson').disabled = true;
+	try { gsEl('btnApplyIps').disabled = true; } catch (e) { }
 	gsEl('gsResults').innerHTML = '';
 	gsSetStats('در حال کالیبراسیون با پایهٔ اینترنت شما...');
 	try {
 		await gsCalibrate();
-		gsSetStats('در حال جمع‌آوری نامزدها از منابع غول...');
-		var ips = await gsBuildCandidates(want);
+		gsSetStats('در حال جمع‌آوری نامزدها (هدف: ' + wantClean + ' آی‌پی تمیز کامل)...');
+		var poolSize = Math.min(2000, Math.max(wantClean * 8, 120));
+		var ips = await gsBuildCandidates(poolSize);
 		if (!ips.length) throw new Error('نامزدی پیدا نشد — منابع را بررسی کنید.');
 		var jobs = [];
-		var MAXJOBS = 1400;
 		for (var i = 0; i < ips.length; i++) {
-			for (var p = 0; p < ports.length; p++) {
-				if (jobs.length >= MAXJOBS) break;
-				jobs.push({ ip: ips[i], port: ports[p] });
-			}
-			if (jobs.length >= MAXJOBS) break;
+			for (var p = 0; p < ports.length; p++) jobs.push({ ip: ips[i], port: ports[p] });
 		}
-		/* ---- مرحله ۱: جاروی سریع ---- */
-		GS.stage = 1; GS.total = jobs.length; GS.done = 0;
-		var survivors = [];
+		/* نامزدها قاطی شوند تا از همهٔ رنج‌ها/کشورها یکنواخت شکار شود */
+		for (var si = jobs.length - 1; si > 0; si--) {
+			var sj = Math.floor(Math.random() * (si + 1));
+			var tj = jobs[si]; jobs[si] = jobs[sj]; jobs[sj] = tj;
+		}
+		GS.total = jobs.length; GS.done = 0;
+		var cleanCount = 0;
+		var CHUNK = 60;
+		var MAXPROBE = 5000;
 		var sweepTimeout = Math.max(1600, GS.baseline * 6);
-		await gsPoolRun(jobs, 24, async function (j) {
-			var r = await gsProbeOnce(j.ip, j.port, sweepTimeout);
-			GS.done++;
-			var key = j.ip + '|' + j.port;
-			var isClean = (r.cls === 'cert' || r.cls === 'open');
-			GS.rows[key] = { ip: j.ip, port: j.port, stage: 1, ok: isClean, times: isClean ? [r.ms] : [], blocked: !isClean, cls: r.cls, ms1: r.ms };
-			if (isClean) survivors.push(j);
-			if (GS.done % 6 === 0 || GS.done === jobs.length) gsRender();
-		});
-		if (GS.stop) { await gsFinish(true); return; }
-		/* ---- مرحله ۲: دقت روی بازماندگان (۳ دوره) ---- */
-		GS.stage = 2; GS.total = survivors.length * 3; GS.done = 0;
-		await gsPoolRun(survivors, 10, async function (j) {
-			var key = j.ip + '|' + j.port;
-			var row = GS.rows[key];
-			if (!row) return;
-			row.times = [];
-			for (var k = 0; k < 3; k++) {
-				if (GS.stop) break;
-				var r = await gsProbeOnce(j.ip, j.port, 3500);
+		for (var c0 = 0; c0 < jobs.length && !GS.stop && cleanCount < wantClean && GS.done < MAXPROBE; c0 += CHUNK) {
+			var chunk = jobs.slice(c0, c0 + CHUNK);
+			/* ---- مرحله ۱: جاروی سریع این دسته ---- */
+			GS.stage = 1;
+			var survivors = [];
+			await gsPoolRun(chunk, 24, async function (j) {
+				var r = await gsProbeOnce(j.ip, j.port, sweepTimeout);
 				GS.done++;
-				if (r.cls === 'cert' || r.cls === 'open') row.times.push(r.ms);
-				else row.times.push(-1);
-				if (GS.done % 4 === 0) gsRender();
+				var key = j.ip + '|' + j.port;
+				var isClean = (r.cls === 'cert' || r.cls === 'open');
+				GS.rows[key] = { ip: j.ip, port: j.port, stage: 1, ok: isClean, times: isClean ? [r.ms] : [], blocked: !isClean, cls: r.cls, ms1: r.ms };
+				if (isClean) survivors.push(j);
+				if (GS.done % 6 === 0) gsRender();
+			});
+			if (GS.stop) break;
+			/* ---- مرحله ۲: تأیید دقیق ۳ دوره‌ای برای بازماندگان همین دسته ---- */
+			if (survivors.length) {
+				GS.stage = 2;
+				await gsPoolRun(survivors, 10, async function (j) {
+					var key = j.ip + '|' + j.port;
+					var row = GS.rows[key];
+					if (!row) return;
+					row.times = [];
+					for (var k = 0; k < 3; k++) {
+						if (GS.stop) break;
+						var r = await gsProbeOnce(j.ip, j.port, 3500);
+						GS.done++;
+						if (r.cls === 'cert' || r.cls === 'open') row.times.push(r.ms);
+						else row.times.push(-1);
+					}
+					var good = row.times.filter(function (x) { return x >= 0; });
+					row.stage = 2;
+					row.okCount = good.length;
+					row.med = gsMedian(good);
+					row.jit = good.length > 1 ? (Math.max.apply(null, good) - Math.min.apply(null, good)) : 0;
+					row.ok = good.length >= 2;
+					if (row.ok && row.med != null && GS.baseline && row.med < Math.max(45, GS.baseline * 0.55)) {
+						row.ok = false; row.blocked = true; row.cls = 'rst-late';
+					}
+					row.score = row.ok ? ((row.med || 0) + 0.5 * (row.jit || 0)) : 999999;
+				});
 			}
-			var good = row.times.filter(function (x) { return x >= 0; });
-			row.stage = 2;
-			row.okCount = good.length;
-			row.med = gsMedian(good);
-			row.jit = good.length > 1 ? (Math.max.apply(null, good) - Math.min.apply(null, good)) : 0;
-			row.ok = good.length >= 2;
-			/* پالایش RST دیررس: جواب «تمیز» که به‌طور مشکوکی از پایهٔ نت سریع‌تر است = تزریق اپراتور */
-			if (row.ok && row.med != null && GS.baseline && row.med < Math.max(45, GS.baseline * 0.55)) {
-				row.ok = false; row.blocked = true; row.cls = 'rst-late';
-			}
-			row.score = row.ok ? ((row.med || 0) + 0.5 * (row.jit || 0)) : 999999;
+			cleanCount = 0;
+			for (var ck in GS.rows) if (GS.rows[ck].ok) cleanCount++;
 			gsRender();
-		});
+			gsSetStats('🎯 تمیز: ' + cleanCount + ' از ' + wantClean + ' • پروب: ' + GS.done + ' • پایهٔ نت: ' + GS.baseline + 'ms' + (cleanCount >= wantClean ? ' — هدف کامل شد! ✅' : ' — ادامهٔ شکار...'));
+			if (GS.stop) break;
+		}
 		await gsFinish(false);
 	} catch (e) {
 		gsSetStats('⛔ ' + (e && e.message ? e.message : e));
@@ -14023,6 +14037,7 @@ async function gsStartScan() {
 		gsEl('gsExportJson').disabled = !Object.keys(GS.rows).length;
 	}
 }
+
 async function gsFinish(stopped) {
 	var cleans = gsSorted().filter(function (r) { return r.ok; });
 	/* پرچم کشورها (دسته‌ای از ورکر) */
@@ -14053,7 +14068,11 @@ async function gsFinish(stopped) {
 	GS.running = false;
 	gsEl('gsStart').disabled = false; gsEl('gsStop').disabled = true;
 	var el = Math.round((Date.now() - GS.t0) / 1000);
-	gsSetStats((stopped ? '⏹ اسکن متوقف شد. ' : '🏁 اسکن غول در ' + el + ' ثانیه تمام شد. ') + 'آی‌پی تمیز: ' + cleans.length + ' • پایهٔ نت شما: ' + GS.baseline + 'ms' + (cleans.length ? ' — آمادهٔ «اعمال بهترین‌ها».' : ' — آی‌پی تمیزی روی این نت پیدا نشد؛ پورت/تعداد را عوض کنید.'));
+	var wantT = GS.wantClean || 0;
+	var tailMsg = (wantT && cleans.length >= wantT) ? ' — 🎯 هدف (' + wantT + ' آی‌پی تمیز) کامل پیدا شد! ✅'
+		: (cleans.length ? ' — آمادهٔ «اعمال بهترین‌ها».' + (wantT ? ' (هدف ' + wantT + ' بود؛ روی این نت بیشتر از این پیدا نشد — منابع/پورت‌ها را بیشتر کن)' : '')
+		: ' — آی‌پی تمیزی روی این نت پیدا نشد؛ پورت/منابع را عوض کنید.');
+	gsSetStats((stopped ? '⏹ اسکن متوقف شد. ' : '🏁 اسکن در ' + el + ' ثانیه تمام شد. ') + 'آی‌پی تمیز: ' + cleans.length + (wantT ? ' از هدف ' + wantT : '') + ' • پایهٔ نت: ' + GS.baseline + 'ms' + tailMsg);
 	gsEl('gsApplyTop').disabled = !cleans.length;
 	try { gsEl('btnApplyIps').disabled = !cleans.length; } catch (e) { }
 	gsEl('gsExportJson').disabled = !Object.keys(GS.rows).length;
