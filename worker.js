@@ -1,5 +1,5 @@
 import { connect } from "cloudflare:sockets";
-const LML_SCANNER_RELEASE = {"version": "1.0.1", "build": "lean-global-20260926", "notes": ["🚀 همه‌چیز داخل پنل — اسکنر ترمینال حذف شد؛ اسکنر غول مرورگری با پراکندگی جهانی از همهٔ کشورها","🫀 پایش زندهٔ آی‌پی‌ها — چک مداوم هر ۱ تا ۶۰ ثانیه، شناسایی خودکار آی‌پی مرده و گزارش crowd برای مرتب‌سازی ساب","📉 کاهش شدید مصرف اینترنت — ساب سبک (حداکثر ۴ آی‌پی برتر × ۲ پورت + دامنه)، بروزرسانی کلاینت هر ۶ ساعت","⚡ ساخت سریع = قوی‌ترین کانفیگ — تک‌پورت ۴۴۳ و بهترین آی‌پی‌ها، بدون کانفیگ اضافه","🧹 داشبورد بدون کارت نمایندگان + طراحی مدرن صفحهٔ ساخت رمز عبور","🌍 رنج‌های زندهٔ کلودفلر جهان از BGP + رنج تأییدشدهٔ 45.130.125.0/24"]};
+const LML_SCANNER_RELEASE = {"version": "1.0.2", "build": "notify-update-20260926", "notes": ["🔕→🔔 آپدیت مخفی حذف شد — پنل حالا نسخهٔ جدید را با اعلان نشان می‌دهد و فقط با تأیید شما آپدیت می‌کند","🚀 اسکنر غول مرورگری با پراکندگی جهانی از همهٔ کشورها (بدون ابزار ترمینال)","🫀 پایش زندهٔ آی‌پی‌ها — چک مداوم هر ۱ تا ۶۰ ثانیه و گزارش خودکار آی‌پی‌های مرده","📉 ساب کم‌مصرف: حداکثر ۴ آی‌پی برتر × ۲ پورت + دامنه، بروزرسانی کلاینت هر ۶ ساعت","⚡ ساخت سریع = قوی‌ترین کانفیگ (تک‌پورت ۴۴۳) + طراحی جدید صفحه ساخت رمز عبور"]};
 
 function safeWaitUntil(ctx, promise) {
 	if (ctx && typeof ctx.waitUntil === "function") {
@@ -11,7 +11,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1";
+const LML_PANEL_VERSION = "1.0.2";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -11419,7 +11419,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1';
+var CURRENT_VERSION = '1.0.2';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -16123,37 +16123,14 @@ async function checkForUpdates(isManual) {
 }
 window.checkForUpdates = checkForUpdates;
 
-/* v1.1.0 GIANT: آپدیت خودکارِ مخفی — وقتی «آپدیت خودکار» فعال است (پیش‌فرض: بله)،
-   نسخهٔ جدید از گیت‌هاب بدون پرسش، بدون دیالوگ و بدون مزاحمت دیپلوی می‌شود
-   و صفحه یک‌بار بی‌صدا رفرش می‌شود. اگر توکن کلودفلر نباشد، بی‌صدا رد می‌شود. */
+/* v1.0.2: آپدیت مخفی حذف شد — پنل نسخهٔ جدید را «اعلان» می‌دهد و فقط با تأیید مدیر آپدیت می‌کند */
 async function promptUpdate(latest) {
 	var now = Date.now();
 	if (LML_UPDATE_PROMPT_VER === latest && (now - LML_UPDATE_PROMPT_AT) < 6 * 3600 * 1000) return false;
 	LML_UPDATE_PROMPT_AT = now;
 	LML_UPDATE_PROMPT_VER = latest;
-	if (State.autoUpdate && !LML_UPDATE_BUSY) {
-		try { if (sessionStorage.getItem('lml_silent_update_done') === String(latest)) return false; } catch (e) { }
-		LML_UPDATE_BUSY = true;
-		var okS = false;
-		try {
-			var resS = await api('/api/update-panel', { method: 'POST', body: {} });
-			var dataS = await resS.json().catch(function () { return {}; });
-			if (resS.ok && dataS.success) {
-				okS = true;
-				try { sessionStorage.setItem('lml_silent_update_done', String(latest)); } catch (e) { }
-				try { sessionStorage.setItem('lml_last_update', String(Date.now())); } catch (e) { }
-				setTimeout(function () { window.location.reload(); }, 2500);
-			} else if (resS.status === 400 && (dataS.error === 'TOKEN_REQUIRED' || dataS.error === 'INVALID_TOKEN')) {
-				try { console.info('LML: آپدیت مخفی به توکن کلودفلر نیاز دارد — از تنظیمات، توکن را ذخیره کنید.'); } catch (e) { }
-			} else {
-				try { console.info('LML: آپدیت مخفی ناموفق بود — از دکمهٔ دستی در تنظیمات می‌توانید تلاش کنید.'); } catch (e) { }
-			}
-		} catch (e) { }
-		LML_UPDATE_BUSY = false;
-		return okS;
-	}
-	var ok = await confirmBox('نسخهٔ ' + latest + ' روی مخزن گیت‌هاب موجود است (نسخهٔ فعلی پنل: ' + CURRENT_VERSION + '). آپدیت انجام شود؟ (به نسخه بالاتر یا پایین‌تر)',
-		{ title: 'اپدیت خودکار از گیت‌هاب', okText: 'بله، اپدیت کن', cancelText: 'بعداً' });
+	var ok = await confirmBox('🔔 نسخهٔ جدید ' + latest + ' روی مخزن گیت‌هاب موجود است (نسخهٔ فعلی پنل: ' + CURRENT_VERSION + '). آپدیت انجام شود؟',
+		{ title: 'بروزرسانی پنل از گیت‌هاب', okText: 'بله، آپدیت کن', cancelText: 'بعداً' });
 	if (!ok) return false;
 	return await applyPanelUpdate();
 }
