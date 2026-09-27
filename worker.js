@@ -1,5 +1,5 @@
 import { connect } from "cloudflare:sockets";
-const LML_SCANNER_RELEASE = {"version": "1.0.2-beta.2", "build": "beta2-doctor-20260927", "notes": ["🩺 دکتر اتصال در صفحهٔ کاربر — عیب‌یابی زندهٔ دامنه/آی‌پی/پورت از نت خود کاربر با نتیجهٔ فارسی", "🔁 تازه‌سازی فوری کانفیگ‌ها با یک کلیک (UUID نو) — درمان کانفیگ سوخته/فیلترشده در پرتال و صفحه کاربر", "🗑 هوش مصنوعی، نودها و کشور خروجی VIP حذف شد — ساکس فقط از استخر عمومی تست‌شده (مخزن VIP برچیده شد)", "📍 نوار پنل کامل شد: آی‌پی + شهر + اپراتور + خروجی واقعی؛ پرچم کشورها در اسکنر/تست برگشت", "✨ پنل گرافیکی‌تر: هاور کارت‌ها، گرادیان دکمه‌ها، انیمیشن مودال‌ها", "🧹 ساخت سریع فقط با آی‌پی تمیز crowd (بدون آی‌پی کثیف تصادفی)"]};
+const LML_SCANNER_RELEASE = {"version": "1.0.2", "build": "rocket-socks-20260927", "notes": ["🚀 ساخت موشکی: کشور خروجی را انتخاب کن — ساکس عمومی زنده اسکن پینگ می‌شود و سریع‌ترین به کاربر جدید زنجیر می‌شود (با چرخش خودکار پروکسی مرده)", "🧦 گزینهٔ زنجیر ساکس عمومی در «ساخت سریع» — همه فقط از منابع عمومیِ تست‌شده (handshake + CONNECT واقعی)", "🩺 دکتر اتصال در صفحهٔ کاربر — عیب‌یابی زندهٔ دامنه/آی‌پی/پورت از نت خود کاربر با نتیجهٔ روشن", "🔁 تازه‌سازی فوری کانفیگ‌ها (UUID نو) با یک کلیک در پرتال و صفحهٔ کاربر", "📍 نوار پنل: آی‌پی + شهر + اپراتور + خروجی واقعی | صفحهٔ کاربر: اپراتور و دیتاسنتر خروجی", "✨ گرافیک تقویت‌شدهٔ پنل: هاور کارت‌ها، گرادیان دکمه‌ها، انیمیشن مودال‌ها"]};
 
 function safeWaitUntil(ctx, promise) {
 	if (ctx && typeof ctx.waitUntil === "function") {
@@ -11,7 +11,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.2-beta.2";
+const LML_PANEL_VERSION = "1.0.2";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -11304,7 +11304,7 @@ const HTML_TEMPLATES = {
 	</div>
 </div>
 
-<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.2-beta.2 • همه‌چیز داخل پنل</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
+<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.2 • همه‌چیز داخل پنل</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
 <h4 style="margin-top:2px">🚀 اسکنر غول — شکارچی لبهٔ کلودفلر (روی اینترنت خودتان)</h4>
 <div class="note"><svg><use href="#i-info"/></svg><div>بدون نیاز به هیچ ابزار اضافه — موتور <b>همین‌جا در مرورگر، روی نت خودتان</b> اجرا می‌شود: نامزدها از مخزن غول پنل + رنج‌های زندهٔ کلودفلر (رسمی، جدید و BGP جهانی) جمع می‌شوند، و بعد <b>دسته‌دسته تا رسیدن به عدد هدف شما</b> (مثلاً دقیقاً ۶۰ آی‌پی تمیز) به جست‌وجو ادامه می‌دهد؛ هر آی‌پی با <b>بازآزمون دقیق ۳ دوره</b> تأیید می‌شود. معیار تمیزی: کامل‌شدن handshake (خطا از جنس گواهی = لبه جواب داده)، نه timeouts و نه RST اپراتور. ✅ پرچم نتایج = <b>محل ثبت آی‌پی</b> (آی‌پی Anycast کلودفلر معمولاً آمریکا ثبت شده) — <b>خروجی واقعی اتصال</b>، نزدیک‌ترین دیتاسنتر کلودفلر به توست که در صفحهٔ کاربر و ریمارک کانفیگ نشان داده می‌شود.</div></div>
 <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0;font-size:12px">
@@ -11403,6 +11403,23 @@ const HTML_TEMPLATES = {
 </div>
 
 <!-- ==================== QUICK CONFIG MODAL ==================== -->
+<div class="modal narrow" id="modalRocket"><div class="modal-card">
+	<div class="modal-head">
+		<div class="mh-icon" style="background:var(--accent-soft);color:var(--accent)">🚀</div>
+		<div class="mh-text"><h3 class="modal-title">🚀 ساخت موشکی (ساکس عمومی)</h3><p class="modal-sub">کشور را انتخاب کن — سریع‌ترین ساکس عمومی زنده اسکن و به کاربر زنجیر می‌شود</p></div>
+		<button type="button" class="icon-btn" data-close-modal="modalRocket"><svg><use href="#i-x"/></svg></button>
+	</div>
+	<div class="modal-body">
+		<div class="note"><svg><use href="#i-info"/></svg><div>فقط از <b>منابع ساکس عمومی و تست‌شده</b> (handshake + CONNECT واقعی) اسکن می‌شود — بدون هیچ مخزن VIP. سریع‌ترین پروکسی کشور انتخابی با <b>پینگ زنده</b> به کاربر جدید زنجیر می‌شود و <b>چرخش خودکار پروکسی مرده</b> هم فعال است. ساکس سالم پیدا نشود، کاربر مستقیم ساخته می‌شود.</div></div>
+		<div class="field"><label>کشور خروجی</label><select class="select" id="rocketCountry"><option value="">در حال دریافت استخر عمومی...</option></select></div>
+		<div class="form-row">
+			<div class="field"><label for="rocketLimit">حجم (گیگابایت)</label><input type="number" class="input" id="rocketLimit" value="30" min="1" step="1"></div>
+			<div class="field"><label for="rocketDays">مدت اعتبار (روز)</label><input type="number" class="input" id="rocketDays" value="30" min="1" step="1"></div>
+		</div>
+		<div id="rocketStatus" style="font-size:12px;color:var(--text-3);min-height:18px;line-height:1.9"></div>
+	</div>
+	<div class="modal-foot"><button type="button" class="btn" data-close-modal="modalRocket">انصراف</button><div class="spacer"></div><button type="button" class="btn btn-primary" id="btnRocketCreate">🚀 اسکن ساکس و ساخت کاربر</button></div>
+</div></div>
 <div class="modal narrow" id="modalQuick">
 	<div class="modal-card">
 		<div class="modal-head">
@@ -11431,6 +11448,7 @@ const HTML_TEMPLATES = {
 					<select class="select" id="quickIsp"></select>
 				</div>
 			</div>
+			<div class="field"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-size:12px"><input type="checkbox" id="quickSocks"> 🧦 زنجیر سریع‌ترین ساکس عمومی (اسکن پینگ زنده موقع ساخت)</label></div>
 			<div class="field">
 				<label>تنظیماتی که اعمال می‌شود</label>
 				<div id="quickPreview" style="display:grid;grid-template-columns:1fr 1fr;gap:5px"></div>
@@ -11514,7 +11532,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.2-beta.2';
+var CURRENT_VERSION = '1.0.2';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -15024,6 +15042,7 @@ function renderDashboard() {
 	/* quick actions */
 	var actions = [
 		{ icon: 'bolt', label: 'ساخت سریع', hint: 'بهترین تنظیمات', fn: 'quick-fast' },
+		{ icon: 'globe', label: '🚀 ساخت موشکی', hint: 'ساکس عمومی کشور دلخواه', fn: 'rocket' },
 		{ icon: 'user-plus', label: 'کاربر جدید', hint: 'ایجاد حساب تکی', fn: 'quick-new' },
 		{ icon: 'box', label: 'ساخت گروهی', hint: 'تولید دسته‌ای', fn: 'quick-bulk' },
 		{ icon: 'rocket', label: 'اکانت تست', hint: '۲۴ ساعته ۱ گیگ', fn: 'quick-trial' },
@@ -16515,6 +16534,7 @@ window.logoutAdmin = logoutAdmin;
 function handleQuick(fn) {
 	switch (fn) {
 		case 'quick-fast': openQuickModal(); break;
+		case 'rocket': openRocketModal(); break;
 		case 'quick-new': openCreateUserModal(); break;
 		case 'quick-bulk': openModal('modalBulk'); break;
 		case 'quick-trial': createInstantTrial(); break;
@@ -16538,6 +16558,7 @@ on($('btnQuickAdd'), 'click', function (e) {
 	e.stopPropagation();
 	openMenu(this, [
 		{ icon: 'bolt', label: '⚡ ساخت سریع کانفیگ', action: openQuickModal },
+		{ icon: 'globe', label: '🚀 ساخت موشکی (اسکن ساکس عمومی)', action: openRocketModal },
 		{ icon: 'user-plus', label: 'کاربر جدید', action: openCreateUserModal },
 		{ icon: 'box', label: 'ساخت گروهی', action: function () { openModal('modalBulk'); } },
 		{ icon: 'rocket', label: 'اکانت تست ۲۴ ساعته', action: function () { createInstantTrial(); } },
@@ -16892,6 +16913,139 @@ function openQuickModal() {
 	renderQuickPreview();
 }
 window.openQuickModal = openQuickModal;
+
+/* ============================================================
+   🚀 ROCKET CREATE v1.0.2 — ساخت موشکی با ساکس «عمومی»
+   همان جریان ساخت موشکی زئوس (انتخاب کشور ← اسکن پینگ زنده ←
+   زنجیر سریع‌ترین به کاربر جدید) ولی فقط با منابع ساکس عمومی
+   و تست‌شدهٔ خود پنل (handshake + CONNECT واقعی). بدون مخزن VIP.
+   ============================================================ */
+var ROCKET_CANDS = [];
+async function openRocketModal() {
+	openModal('modalRocket');
+	var sel = $('rocketCountry');
+	set('rocketStatus', 'در حال دریافت استخر ساکس عمومی...');
+	try {
+		var d = await (await api('/api/socks-repo')).json().catch(function () { return {}; });
+		ROCKET_CANDS = (d && Array.isArray(d.proxies)) ? d.proxies : [];
+		var ccs = {};
+		ROCKET_CANDS.forEach(function (p) { var c = String(p.cc || '').toUpperCase(); if (c.length === 2 && /^[A-Z]{2}$/.test(c)) ccs[c] = (ccs[c] || 0) + 1; });
+		var keys = Object.keys(ccs).sort(function (a, b) { return ccs[b] - ccs[a]; });
+		var opts = '<option value="">⚡ سریع‌ترین (بدون کشور خاص)</option>';
+		keys.forEach(function (c) { opts += '<option value="' + c + '">' + flagText(c) + ' ' + c + ' — ' + ccs[c] + ' سرور</option>'; });
+		sel.innerHTML = opts;
+		set('rocketStatus', ROCKET_CANDS.length ? (ROCKET_CANDS.length + ' ساکس عمومی تست‌شده از ' + keys.length + ' کشور آماده است.') : '⚠️ استخر فعلاً خالی است — هنگام ساخت، زنده اسکن می‌شود.');
+	} catch (e) {
+		sel.innerHTML = '<option value="">⚡ سریع‌ترین (بدون کشور خاص)</option>';
+		set('rocketStatus', '⚠️ استخر دریافت نشد — هنگام ساخت، زنده اسکن می‌شود.');
+	}
+}
+window.openRocketModal = openRocketModal;
+async function rocketFindBest(cc) {
+	var cands = [];
+	if (cc) {
+		try {
+			var g = await (await api('/api/geo-pool?cc=' + encodeURIComponent(cc))).json().catch(function () { return {}; });
+			((g && g.proxies) || []).forEach(function (p) {
+				var hp = String(typeof p === 'string' ? p : ((p && (p.hp || p.proxy)) || ''));
+				if (hp) cands.push({ proxy: hp, cc: cc });
+			});
+		} catch (e) { }
+		if (!cands.length) {
+			ROCKET_CANDS.filter(function (p) { return String(p.cc || '').toUpperCase() === cc; })
+				.forEach(function (p) { cands.push({ proxy: String(p.hp || ''), cc: cc }); });
+		}
+	} else {
+		if (!ROCKET_CANDS.length) {
+			try {
+				var d0 = await (await api('/api/socks-repo')).json().catch(function () { return {}; });
+				ROCKET_CANDS = (d0 && Array.isArray(d0.proxies)) ? d0.proxies : [];
+			} catch (e) { }
+		}
+		cands = ROCKET_CANDS.slice().sort(function (a, b) { return (a.ms || 999999) - (b.ms || 999999); })
+			.slice(0, 20).map(function (p) { return { proxy: String(p.hp || ''), cc: String(p.cc || '') }; });
+	}
+	for (var i = cands.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = cands[i]; cands[i] = cands[j]; cands[j] = t; }
+	cands = cands.slice(0, 16);
+	if (!cands.length) return null;
+	set('rocketStatus', '🚀 اسکن پینگ زندهٔ ' + cands.length + ' ساکس عمومی' + (cc ? ' کشور ' + cc : '') + '...');
+	var ctl = new AbortController();
+	var successes = [];
+	var tests = cands.map(function (c) {
+		return api('/api/test-proxy', { body: { proxy: c.proxy, skip_country: true }, signal: ctl.signal })
+			.then(function (r) { return r.json().catch(function () { return {}; }); })
+			.then(function (d) { if (d && d.success && d.ping) successes.push({ proxy: c.proxy, ping: d.ping, cc: c.cc || String(d.country || '') }); })
+			.catch(function () { });
+	});
+	await Promise.race([Promise.all(tests), new Promise(function (r) { setTimeout(r, 12000); })]);
+	try { ctl.abort(); } catch (e) { }
+	if (!successes.length) return null;
+	successes.sort(function (a, b) { return a.ping - b.ping; });
+	return successes[0];
+}
+window.rocketFindBest = rocketFindBest;
+async function rocketCleanIps() {
+	var ips = '';
+	try {
+		var repD = await (await api('/api/ip-repo')).json().catch(function () { return {}; });
+		var bestIps = (repD && Array.isArray(repD.global)) ? repD.global.slice(0, 4) : [];
+		if (bestIps.length) ips = bestIps.join(String.fromCharCode(10));
+	} catch (e) { }
+	if (!ips) {
+		try {
+			var ipD = await (await api('/api/scan-ips', { method: 'POST', body: { providers: ['cf'], count: 4 } })).json().catch(function () { return {}; });
+			if (ipD && ipD.ips && ipD.ips.length) ips = ipD.ips.join(String.fromCharCode(10));
+		} catch (e2) { }
+	}
+	return ips;
+}
+async function executeRocketCreate() {
+	var btn = $('btnRocketCreate');
+	if (!btn || btn.disabled) return;
+	btn.disabled = true;
+	var oldTxt = btn.innerHTML;
+	btn.innerHTML = '⏳ در حال اسکن عمومی...';
+	try {
+		var cc = vval('rocketCountry');
+		var best = await rocketFindBest(cc);
+		var limit = parseFloat(vval('rocketLimit')) || 30;
+		var days = parseInt(vval('rocketDays'), 10) || 30;
+		var ips = await rocketCleanIps();
+		var name = 'lml_' + Math.random().toString(36).slice(2, 8);
+		set('rocketStatus', best
+			? ('✅ سریع‌ترین ساکس پیدا شد: ' + best.proxy + ' (' + best.ping + 'ms' + (best.cc ? ' ' + best.cc : '') + ') — در حال ساخت کاربر...')
+			: '⚠️ ساکس عمومی سالم پیدا نشد — کاربر با اتصال مستقیم ساخته می‌شود.');
+		var res = await api('/api/users', { method: 'POST', body: {
+			username: name, limit_gb: limit, expiry_days: days, limit_req: null,
+			tls: 'on', port: '443', ips: ips, fingerprint: 'chrome', ip_limit: null,
+			block_porn: 0, block_ads: 0, frag_len: '200-3000', frag_int: '1-2',
+			advanced_frag: null, cipher_suites: null, tls_mask: null,
+			user_proxy_iata: best ? (best.cc || null) : null,
+			user_socks5: best ? best.proxy : null, user_proxy_ip: null,
+			auto_reset_vol_days: 0, auto_reset_req_days: 0, auto_rotate_ip: 0, rotate_time: 0,
+			ip_operator: 'all', ip_count: 4, auto_rotate_user_proxy: best ? 1 : 0,
+			start_on_first_connect: 0, enable_direct: true,
+			connection_type: 'vless', protocols: ['vless']
+		} });
+		var d = await res.json().catch(function () { return {}; });
+		if (!res.ok) throw new Error(d.error || ('خطای ' + res.status));
+		closeModal('modalRocket');
+		toast('🚀 کاربر ' + name + ' ساخته شد' + (best ? (' — زنجیر به سریع‌ترین ساکس عمومی ' + (best.cc || '') + ' (' + best.ping + 'ms) + چرخش خودکار روشن') : ' (مستقیم)'), 'ok', 10000);
+		try { await loadUsers(); } catch (e3) { }
+		try {
+			var uR = State.allUsers.filter(function (x) { return x.username === name; })[0];
+			if (uR && typeof openCreatedModal === 'function') openCreatedModal(name, uR.uuid || '');
+		} catch (e4) { }
+	} catch (e) {
+		set('rocketStatus', '❌ ' + (e.message || e));
+		toast('❌ خطای ساخت موشکی: ' + (e.message || e), 'err', 9000);
+	}
+	btn.disabled = false;
+	btn.innerHTML = oldTxt;
+}
+on($('btnRocketCreate'), 'click', executeRocketCreate);
+window.executeRocketCreate = executeRocketCreate;
+
 function renderQuickPreview() {
 	var o = quickIsp();
 	var box = $('quickPreview');
@@ -16930,6 +17084,10 @@ async function runQuickCreate() {
 				if (ipData && ipData.ips && ipData.ips.length) ips = ipData.ips.join('\\n');
 			} catch (e2) { }
 		}
+		var bestQ = null;
+		if ($('quickSocks') && $('quickSocks').checked) {
+			try { bestQ = await rocketFindBest(''); } catch (eQ) { bestQ = null; }
+		}
 		var made = [];
 		for (var k = 0; k < count; k++) {
 			var name = 'lml_' + Math.random().toString(36).slice(2, 7) + (count > 1 ? ('_' + (k + 1)) : '');
@@ -16940,9 +17098,9 @@ async function runQuickCreate() {
 					tls: 'on', port: '443', ips: ips, fingerprint: 'chrome', ip_limit: null,
 					block_porn: 0, block_ads: 0, frag_len: o.len, frag_int: o.int,
 					advanced_frag: null, cipher_suites: null, tls_mask: null,
-					user_proxy_iata: null, user_socks5: null, user_proxy_ip: null,
+					user_proxy_iata: bestQ ? (bestQ.cc || null) : null, user_socks5: bestQ ? bestQ.proxy : null, user_proxy_ip: null,
 					auto_reset_vol_days: 0, auto_reset_req_days: 0, auto_rotate_ip: 0, rotate_time: 0,
-					ip_operator: 'all', ip_count: 4, auto_rotate_user_proxy: 0,
+					ip_operator: 'all', ip_count: 4, auto_rotate_user_proxy: bestQ ? 1 : 0,
 					start_on_first_connect: 0, enable_direct: true,
 					connection_type: 'vless', protocols: ['vless']
 				}
