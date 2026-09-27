@@ -1,5 +1,5 @@
 import { connect } from "cloudflare:sockets";
-const LML_SCANNER_RELEASE = {"version": "1.0.1", "build": "exit-flag-20260926", "notes": ["📍 پرچم خروجی واقعی: ریمارک کانفیگ‌ها و صفحهٔ کاربر حالا کشور دیتاسنتر کلودفلر (خروجی واقعی تو) را نشان می‌دهد — نه محل ثبت آی‌پی Anycast (آمریکا) که گمراه‌کننده بود","🎯 اسکنر هدف‌محور — تعداد آی‌پی تمیز درخواستی را کامل پیدا می‌کند","🔔 آپدیت فقط با اعلان و تأیید مدیر","🚀 اسکنر غول با پراکندگی جهانی + 🫀 پایش زندهٔ آی‌پی‌ها","📉 ساب کم‌مصرف + ⚡ ساخت سریع قوی‌ترین کانفیگ + طراحی جدید صفحه رمز عبور"]};
+const LML_SCANNER_RELEASE = {"version": "1.0.2-beta.2", "build": "beta2-doctor-20260927", "notes": ["🩺 دکتر اتصال در صفحهٔ کاربر — عیب‌یابی زندهٔ دامنه/آی‌پی/پورت از نت خود کاربر با نتیجهٔ فارسی", "🔁 تازه‌سازی فوری کانفیگ‌ها با یک کلیک (UUID نو) — درمان کانفیگ سوخته/فیلترشده در پرتال و صفحه کاربر", "🗑 هوش مصنوعی، نودها و کشور خروجی VIP حذف شد — ساکس فقط از استخر عمومی تست‌شده (مخزن VIP برچیده شد)", "📍 نوار پنل کامل شد: آی‌پی + شهر + اپراتور + خروجی واقعی؛ پرچم کشورها در اسکنر/تست برگشت", "✨ پنل گرافیکی‌تر: هاور کارت‌ها، گرادیان دکمه‌ها، انیمیشن مودال‌ها", "🧹 ساخت سریع فقط با آی‌پی تمیز crowd (بدون آی‌پی کثیف تصادفی)"]};
 
 function safeWaitUntil(ctx, promise) {
 	if (ctx && typeof ctx.waitUntil === "function") {
@@ -11,7 +11,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1";
+const LML_PANEL_VERSION = "1.0.2-beta.2";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -399,6 +399,7 @@ async function lmlGetIpCc(env) { return (await lmlLoadIpTestMem(env)).cc || {}; 
    ============================================================ */
 const CROWD_MEM = new Map();
 const CROWD_RL = new Map();
+const ROTATE_RL = new Map();
 let CROWD_LAST_FLUSH = 0;
 let CROWD_DB_CACHE = { at: 0, map: null };
 function lmlCrowdRegion(request) {
@@ -1377,43 +1378,27 @@ async function replaceBrokenProxy(username, env, oldProxy) {
 		let newProxy = null;
 		let finalCountry = null;
 		const upperCountry = (countryCode || "ALL").toUpperCase();
-		const sources = [];
-		const isOldProxyVIP = oldProxy.includes("@") || oldProxy.includes("t.me/");
-		
-		if (cachedVipCountries.length === 0 || Date.now() - lastVipCountriesFetch > 3600000) {
-			try {
-				const ghRes = await fetchWithFallback("vip-list", {
-					headers: { "User-Agent": "Mozilla/5.0" },
-				});
-				if (ghRes.ok) {
-					const files = await ghRes.json();
-					cachedVipCountries = files.filter((f) => f.name.endsWith(".txt")).map((f) => f.name.replace(".txt", "").toUpperCase());
-					lastVipCountriesFetch = Date.now();
-				}
-			} catch (e) { }
-		}
-		
-		let fallbackVIPs = cachedVipCountries.length > 0 ? [...cachedVipCountries] : ["DE", "US", "GB", "NL", "FR", "TR"];
-		for (let i = fallbackVIPs.length - 1; i > 0; i--) {
-			const j = Math.floor(Math.random() * (i + 1));
-			[fallbackVIPs[i], fallbackVIPs[j]] = [fallbackVIPs[j], fallbackVIPs[i]];
-		}
-		
-		if (upperCountry !== "ALL" && upperCountry !== "UN") {
-			sources.push({ url: `proxy_vip/${upperCountry}.txt`, type: "repo", country: upperCountry });
-		}
-		for (const fc of fallbackVIPs) {
-			if (fc !== upperCountry) {
-				sources.push({ url: `proxy_vip/${fc}.txt`, type: "repo", country: fc });
-			}
-		}
-		
-		if (!isOldProxyVIP) {
+		/* v1.0.2-beta.2: مخزن VIP (vip-list/proxy_vip) کاملاً حذف شد —
+		   پروکسی جایگزین فقط از استخر ساکس عمومی و تست‌شده (handshake+CONNECT واقعی، رتبه‌بندی سرعت) */
+		try {
+			const pubPool = await lmlGetSocksRepo(false);
+			let candsPub = (pubPool && Array.isArray(pubPool.proxies)) ? pubPool.proxies.slice() : [];
 			if (upperCountry !== "ALL" && upperCountry !== "UN") {
-				sources.push({ url: `proxy/${upperCountry}.txt`, type: "repo", country: upperCountry });
+				const inCc = candsPub.filter(function (p) { return String(p.cc || "").toUpperCase() === upperCountry; });
+				if (inCc.length) candsPub = inCc;
 			}
-			sources.push({ url: `proxy/ALL.txt`, type: "repo", country: "ALL" });
-		}
+			candsPub.sort(function (a, b) { return (a.ms || 99999) - (b.ms || 99999); });
+			if (candsPub.length) {
+				const pickPub = candsPub[Math.floor(Math.random() * Math.min(5, candsPub.length))];
+				const hpPub = String((pickPub && (pickPub.hp || pickPub.proxy)) || "").replace(/^(socks4|socks5|socks|http|https):\/\//i, "");
+				if (hpPub) {
+					newProxy = "socks5://" + hpPub;
+					finalCountry = (String((pickPub && pickPub.cc) || "").toUpperCase()) || (upperCountry === "ALL" ? null : upperCountry);
+				}
+			}
+		} catch (e) { }
+		const sources = [];
+		const isOldProxyVIP = false; /* مخزن VIP حذف شد — فقط استخر عمومی */
 		
 		for (const src of sources) {
 			try {
@@ -2007,6 +1992,10 @@ const Router = {
 				colo: String((request.cf && request.cf.colo) || ""),
 				colo_cc: lmlColoCountry(String((request.cf && request.cf.colo) || "")),
 				colo_flag: lmlFlagEmoji(lmlColoCountry(String((request.cf && request.cf.colo) || ""))),
+				operator: (function () { const oS = String((request.cf && request.cf.asOrganization) || ""); if (/iran ?cell|irancell|mtn/i.test(oS)) return "ایرانسل"; if (/mobile telecommunication company of iran|tci|mci|telecommunication infrastructure/i.test(oS)) return "همراه اول"; if (/rightel/i.test(oS)) return "رایتل"; return oS ? oS.slice(0, 24) : ""; })(),
+				colo: String((request.cf && request.cf.colo) || ""),
+				colo_cc: lmlColoCountry(String((request.cf && request.cf.colo) || "")),
+				colo_flag: lmlFlagEmoji(lmlColoCountry(String((request.cf && request.cf.colo) || ""))),
 				fingerprint: user.fingerprint || "chrome",
 				connection_type: user.connection_type || "vless",
 				user_proxy_iata: user.user_proxy_iata,
@@ -2161,6 +2150,45 @@ const Router = {
 							clientKeyboard
 						);
 					}
+					return new Response("OK", { status: 200 });
+				}
+
+				/* ===== v1.0.2-beta: دستورات فول ربات ===== */
+				if (textMsg === "/ver" || textMsg === "🧬 نسخه") {
+					await sendTg("🧬 <b>LML PANEL</b> <code>" + LML_PANEL_VERSION + "</code>\nbuild: <code>" + ((LML_SCANNER_RELEASE && LML_SCANNER_RELEASE.build) || "-") + "</code>");
+					return new Response("OK", { status: 200 });
+				}
+				if (isAdmin && (textMsg === "/users" || textMsg === "👥 لیست کاربران")) {
+					const rowsU = (await env.DB.prepare("SELECT username, limit_gb, used_gb, expiry_days, is_active FROM users ORDER BY id DESC LIMIT 15").all()).results || [];
+					if (!rowsU.length) { await sendTg("هنوز کاربری ثبت نشده است."); }
+					else {
+						let tU = "<b>👥 ۱۵ کاربر آخر:</b>\n";
+						rowsU.forEach(function (rU) { tU += "▫️ <code>" + rU.username + "</code> " + (rU.is_active ? "🟢" : "🔴") + " " + ((rU.used_gb || 0).toFixed(1)) + "/" + (rU.limit_gb || "∞") + "GB • " + (rU.expiry_days || "∞") + "روز\n"; });
+						await sendTg(tU);
+					}
+					return new Response("OK", { status: 200 });
+				}
+				if (isAdmin && textMsg.startsWith("/del ")) {
+					const dnX = textMsg.slice(5).trim().slice(0, 64);
+					if (dnX) {
+						const uDel = await env.DB.prepare("SELECT username FROM users WHERE username = ? COLLATE NOCASE").bind(dnX).first();
+						if (!uDel) await sendTg("❌ کاربر <code>" + dnX + "</code> پیدا نشد.");
+						else { await env.DB.prepare("DELETE FROM users WHERE username = ? COLLATE NOCASE").bind(dnX).run(); await sendTg("✅ کاربر <code>" + dnX + "</code> حذف شد."); }
+					}
+					return new Response("OK", { status: 200 });
+				}
+				if (isAdmin && textMsg.startsWith("/ip ")) {
+					const ipQ = textMsg.slice(4).trim().slice(0, 45);
+					try {
+						const sniH = await lmlPanelHostResolve(env, url.hostname);
+						const bgpQ = await lmlBgpCfRanges(env);
+						const wideQ = lmlIpInCfWide(ipQ, bgpQ);
+						if (wideQ) { await sendTg("✅ <code>" + ipQ + "</code> — لبهٔ کلودفلر (" + (wideQ === "official" ? "رنج رسمی" : "BGP جهانی") + ") • در کانفیگ‌ها می‌ماند ☁️"); }
+						else {
+							const pQ = await lmlProbeIpTls(ipQ, 443, sniH, 4500);
+							await sendTg((pQ.ok ? "✅ " : "⚠️ ") + "<code>" + ipQ + "</code> — " + pQ.reason + (pQ.ms ? " (" + pQ.ms + "ms)" : "") + "\n(هیچ آی‌پی حذف نمی‌شود)");
+						}
+					} catch (eQ) { await sendTg("⚠️ تست آی‌پی خطا داد: " + String(eQ.message || eQ).slice(0, 80)); }
 					return new Response("OK", { status: 200 });
 				}
 
@@ -2624,6 +2652,29 @@ const Router = {
 			});
 			return { ranges: ranges, status: status };
 		}
+		if (url.pathname === "/api/rotate-uuid" && request.method === "POST") {
+			/* 🔁 تازه‌سازی فوری کانفیگ‌ها: یوآی‌دی جدید = همه‌چیز نو (ضد کانفیگ سوخته/لو رفته) */
+			try {
+				const body = await readJsonBody(request);
+				const unameR = String(body.username || "").trim().slice(0, 64);
+				const tokenR = String(body.token || "");
+				if (!unameR) return new Response(JSON.stringify({ error: "bad request" }), { status: 400, headers: { "Content-Type": "application/json" } });
+				const uR = await env.DB.prepare("SELECT username, uuid FROM users WHERE username = ? COLLATE NOCASE OR uuid = ?").bind(unameR, unameR).first();
+				if (!uR) return new Response(JSON.stringify({ error: "user not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
+				if (tokenR !== String(uR.uuid || "").slice(-8)) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 403, headers: { "Content-Type": "application/json" } });
+				const ipR = String(request.headers.get("CF-Connecting-IP") || "x");
+				const nowR = Date.now();
+				if (nowR - (ROTATE_RL.get(ipR) || 0) < 60000) return new Response(JSON.stringify({ error: "بین هر تازه‌سازی ۶۰ ثانیه صبر کنید" }), { status: 429, headers: { "Content-Type": "application/json" } });
+				ROTATE_RL.set(ipR, nowR);
+				if (ROTATE_RL.size > 3000) ROTATE_RL.clear();
+				const newUuid = crypto.randomUUID();
+				await env.DB.prepare("UPDATE users SET uuid = ? WHERE username = ?").bind(newUuid, uR.username).run();
+				try { GLOBAL_ACTIVE_IPS.delete(uR.username); DB_CACHE.clear(); } catch (e) { }
+				return new Response(JSON.stringify({ success: true, rotated: true }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+			} catch (e) {
+				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+			}
+		}
 		if (url.pathname === "/api/cf-ranges" && request.method === "GET") {
 			/* GIANT: تمام رنج‌های کلودفلر — رسمی + جدید تأییدشده + لایهٔ زندهٔ BGP جهانی */
 			try {
@@ -2709,7 +2760,15 @@ const Router = {
 				const myIp = String(request.headers.get("CF-Connecting-IP") || "");
 				const myCc = String(cfM.country || "");
 				const myCity = String(cfM.city || "");
-				return new Response(JSON.stringify({ ip: myIp, cc: myCc, city: myCity, flag: lmlFlagEmoji(myCc) }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+				const myColo = String(cfM.colo || "");
+				const coloCc = lmlColoCountry(myColo);
+				const asOrg = String(cfM.asOrganization || "");
+				let opName = "";
+				if (/iran ?cell|irancell|mtn/i.test(asOrg)) opName = "ایرانسل";
+				else if (/mobile telecommunication company of iran|tci|mci|telecommunication infrastructure/i.test(asOrg)) opName = "همراه اول";
+				else if (/rightel|irancell|dpi/i.test(asOrg)) opName = "رایتل";
+				else if (asOrg) opName = asOrg.slice(0, 22);
+				return new Response(JSON.stringify({ ip: myIp, cc: myCc, city: myCity, flag: lmlFlagEmoji(myCc), colo: myColo, colo_cc: coloCc, colo_flag: lmlFlagEmoji(coloCc), asn: String(cfM.asn || ""), asOrg: asOrg, operator: opName }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 			} catch (e) {
 				return new Response(JSON.stringify({ ip: "", cc: "", city: "" }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
 			}
@@ -4441,13 +4500,14 @@ function renderUserPortal(user, host, url, plainConfigs) {
 			</div>
 		</div>
 
-		<!-- CONFIG & SUB BUTTONS (دکمه‌های ورود به برنامه‌ها طبق درخواست حذف شد) -->
+		<!-- CONFIG & SUB BUTTONS (دکمه‌های ورود به برنامه‌ها طبق درخواست حذف شد) -->		<!-- CONFIG & SUB BUTTONS (دکمه‌های ورود به برنامه‌ها طبق درخواست حذف شد) -->
 		<div class="card-glass rounded-3xl p-5 flex flex-col gap-3 shadow-xl">
 			<h2 class="text-xs font-black text-[#7BAED4] flex items-center gap-1.5 mb-1">
 				<span>📥 دریافت کانفیگ و اشتراک</span>
 			</h2>
 			
 			<div class="flex flex-col gap-2 mt-2">
+				<button onclick="lmlRotateUuid(this)" class="w-full py-2.5 bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 rounded-xl text-xs font-bold transition active:scale-95">🔁 کانفیگ‌ها سوخته یا فیلتر شده؟ تازه‌سازی فوری (کانفیگ کاملاً نو)</button>
 				<button onclick="lmlCopySmartVless(this)" class="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-black transition active:scale-95 shadow-lg shadow-blue-600/30 flex items-center justify-center gap-1.5 cursor-pointer">
 					<span>📋 کپی کانفیگ VLESS (همه‌ی لینک‌ها)</span>
 				</button>
@@ -4601,6 +4661,19 @@ function renderUserPortal(user, host, url, plainConfigs) {
 			lmlDoCopy(LML_PORTAL_SUBURL, 'ℹ️ لینک ساب کپی شد — آن را به‌عنوان اشتراک در برنامه اضافه کنید');
 		}
 		function lmlCopySub() { lmlDoCopy(LML_PORTAL_SUBURL, 'لینک ساب کپی شد!'); }
+		async function lmlRotateUuid(btn) {
+			if (!confirm('کانفیگ‌های فعلی کاملاً باطل و کانفیگ نو ساخته می‌شود (نیاز به پیست مجدد در اپ). ادامه بدم؟')) return;
+			var old = btn.textContent;
+			try {
+				btn.disabled = true; btn.textContent = '⏳ در حال تازه‌سازی...';
+				var r = await fetch('/api/rotate-uuid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: '${user.username}', token: '${String(user.uuid || "").slice(-8)}' }) });
+				var d = await r.json().catch(function () { return {}; });
+				if (r.ok && d.success) {
+					btn.textContent = '✅ تازه شد! صفحه رفرش می‌شود...';
+					setTimeout(function () { window.location.reload(); }, 1600);
+				} else { btn.textContent = '❌ ' + (d.error || 'خطا'); setTimeout(function () { btn.textContent = old; btn.disabled = false; }, 3000); }
+			} catch (e) { btn.textContent = '❌ خطای ارتباط'; setTimeout(function () { btn.textContent = old; btn.disabled = false; }, 3000); }
+		}
 		function lmlCopy(text, msg) { lmlDoCopy(text, msg || 'کپی شد!'); }
 		window.lmlCopy = lmlCopy;
 	</script>
@@ -5976,28 +6049,17 @@ async function handlevIees(env, storedData = null, ctx = null, request = null) {
 							);
 
 							if (_isSelfLoop) {
-								// Refresh VIP bypass pool at most once per hour (same strategy as Zeus).
+								/* v1.0.2-beta.2: مخزن VIP حذف شد — استخر بای‌پس فقط از ساکس عمومیِ تست‌شده پر می‌شود (هر ۱ ساعت تازه) */
 								if (!GLOBAL_IPS_CACHE.loop_bypass || Date.now() - (GLOBAL_IPS_CACHE.loop_last_fetch || 0) > 3600000) {
 									GLOBAL_IPS_CACHE.loop_bypass = [];
-									let targetCountries = ["DE", "US", "GB", "NL", "FR"];
 									try {
-										const vipRes = await fetchWithFallback("vip-list");
-										if (vipRes && vipRes.ok) {
-											const files = await vipRes.json();
-											const fetched = files.filter(f => f.name && f.name.endsWith(".txt")).map(f => f.name.replace(".txt","").toUpperCase());
-											if (fetched.length > 0) targetCountries = fetched;
-										}
+										const pubPoolL = await lmlGetSocksRepo(false);
+										const plistL = (pubPoolL && Array.isArray(pubPoolL.proxies)) ? pubPoolL.proxies : [];
+										GLOBAL_IPS_CACHE.loop_bypass = plistL.slice(0, 30).map(function (pL) {
+											const hpL = String((pL && (pL.hp || pL.proxy)) || "").replace(/^(socks4|socks5|socks|http|https):\/\//i, "");
+											return hpL ? ("socks5://" + hpL) : null;
+										}).filter(Boolean);
 									} catch(_) {}
-									targetCountries = targetCountries.sort(() => 0.5 - Math.random()).slice(0, 3);
-									for (const fc of targetCountries) {
-										try {
-											const res = await fetchWithFallback("proxy_vip/" + fc + ".txt");
-											if (res && res.ok) {
-												const lines = (await res.text()).split("\n").map(l => l.trim()).filter(l => l.length > 5);
-												if (lines.length > 0) GLOBAL_IPS_CACHE.loop_bypass = GLOBAL_IPS_CACHE.loop_bypass.concat(lines);
-											}
-										} catch(_) {}
-									}
 									if (GLOBAL_IPS_CACHE.loop_bypass.length > 0) GLOBAL_IPS_CACHE.loop_last_fetch = Date.now();
 								}
 								const bypassPool = (GLOBAL_IPS_CACHE.loop_bypass || []).slice().sort(() => 0.5 - Math.random()).slice(0, 4);
@@ -7391,6 +7453,19 @@ window.LMLQR = LMLQR;
 </script>`;
 
 const COMMON_HEAD = `
+	<style id="lml-gfx-boost">
+	/* ✨ v1.0.2-beta.2 — تقویت گرافیکی پنل */
+	.card,.glass,.glass-panel,.card-glass{transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}
+	.card:hover,.card-glass:hover{transform:translateY(-2px);box-shadow:0 14px 34px rgba(37,99,235,.16)}
+	.btn-primary{background:linear-gradient(90deg,#2563eb,#7c3aed)!important;box-shadow:0 6px 22px rgba(99,102,241,.35)}
+	.btn-primary:hover{filter:brightness(1.12)}
+	.modal.open .modal-card{animation:lmlPop .22s ease}
+	@keyframes lmlPop{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
+	input:focus,select:focus,textarea:focus{box-shadow:0 0 0 3px rgba(59,130,246,.18)!important}
+	.stat-icon{transition:transform .2s}
+	.card:hover .stat-icon{transform:scale(1.08) rotate(-4deg)}
+	.tab.active,.nav-item.active{box-shadow:inset 0 0 0 1px rgba(99,102,241,.4),0 4px 18px rgba(99,102,241,.18)}
+	</style>
 	<script>
 		window.GLOBAL_GFX = "/*{{GFX_SETTING}}*/";
 		if (window.GLOBAL_GFX === 'false' || (window.GLOBAL_GFX.startsWith('/*') && localStorage.getItem('gfx-enabled') !== 'true')) {
@@ -8342,6 +8417,19 @@ const HTML_TEMPLATES = {
 	</script>
 	<meta name="robots" content="noindex, nofollow">
 	<title>LML PANEL — داشبورد مدیریت</title>
+	<style id="lml-gfx-boost">
+	/* ✨ v1.0.2-beta.2 — تقویت گرافیکی پنل */
+	.card,.glass,.glass-panel,.card-glass{transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}
+	.card:hover,.card-glass:hover{transform:translateY(-2px);box-shadow:0 14px 34px rgba(37,99,235,.16)}
+	.btn-primary{background:linear-gradient(90deg,#2563eb,#7c3aed)!important;box-shadow:0 6px 22px rgba(99,102,241,.35)}
+	.btn-primary:hover{filter:brightness(1.12)}
+	.modal.open .modal-card{animation:lmlPop .22s ease}
+	@keyframes lmlPop{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
+	input:focus,select:focus,textarea:focus{box-shadow:0 0 0 3px rgba(59,130,246,.18)!important}
+	.stat-icon{transition:transform .2s}
+	.card:hover .stat-icon{transform:scale(1.08) rotate(-4deg)}
+	.tab.active,.nav-item.active{box-shadow:inset 0 0 0 1px rgba(99,102,241,.4),0 4px 18px rgba(99,102,241,.18)}
+	</style>
 	<link rel="manifest" href="/manifest.json">
 	<link rel="icon" type="image/svg+xml" href="/icon.svg">
 	<link rel="apple-touch-icon" href="/icon-192.png">
@@ -11216,7 +11304,7 @@ const HTML_TEMPLATES = {
 	</div>
 </div>
 
-<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.1 • همه‌چیز داخل پنل — بدون ابزار ترمینال</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
+<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.2-beta.2 • همه‌چیز داخل پنل</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
 <h4 style="margin-top:2px">🚀 اسکنر غول — شکارچی لبهٔ کلودفلر (روی اینترنت خودتان)</h4>
 <div class="note"><svg><use href="#i-info"/></svg><div>بدون نیاز به هیچ ابزار اضافه — موتور <b>همین‌جا در مرورگر، روی نت خودتان</b> اجرا می‌شود: نامزدها از مخزن غول پنل + رنج‌های زندهٔ کلودفلر (رسمی، جدید و BGP جهانی) جمع می‌شوند، و بعد <b>دسته‌دسته تا رسیدن به عدد هدف شما</b> (مثلاً دقیقاً ۶۰ آی‌پی تمیز) به جست‌وجو ادامه می‌دهد؛ هر آی‌پی با <b>بازآزمون دقیق ۳ دوره</b> تأیید می‌شود. معیار تمیزی: کامل‌شدن handshake (خطا از جنس گواهی = لبه جواب داده)، نه timeouts و نه RST اپراتور. ✅ پرچم نتایج = <b>محل ثبت آی‌پی</b> (آی‌پی Anycast کلودفلر معمولاً آمریکا ثبت شده) — <b>خروجی واقعی اتصال</b>، نزدیک‌ترین دیتاسنتر کلودفلر به توست که در صفحهٔ کاربر و ریمارک کانفیگ نشان داده می‌شود.</div></div>
 <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0;font-size:12px">
@@ -11426,7 +11514,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1';
+var CURRENT_VERSION = '1.0.2-beta.2';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -14240,7 +14328,7 @@ on($('btnOpenLmlRepo'), 'click', function () { openModal('modalIpRepo'); lmlLoad
 		var rM = await api('/api/myip');
 		var dM = await rM.json().catch(function () { return {}; });
 		if (dM && dM.ip) {
-			bM.textContent = (dM.flag ? dM.flag + ' ' : '') + (dM.cc ? dM.cc + ' • ' : '') + dM.ip;
+			bM.textContent = [dM.flag || '', dM.cc || '', dM.ip || '', dM.operator || '', (dM.colo ? ('خروجی: ' + (dM.colo_flag || '') + dM.colo) : '')].filter(Boolean).join(' • '); bM.title = (dM.city ? dM.city + ' — ' : '') + 'آی‌پی شما: ' + dM.ip + ' (موقعیت به‌صورت مخفی از هدر کلودفلر خوانده می‌شود)';
 			bM.style.display = '';
 		}
 	} catch (eM) { }
@@ -14384,28 +14472,8 @@ document.addEventListener('click', function (e) {
 	}
 });
 
-/* VIP proxy cache (used to highlight known-good proxy links) */
-async function initVipCache() {
-	try {
-		var res = await fetchWithFallbackUI('vip-list');
-		if (!res.ok) return;
-		var files = await res.json();
-		State.cachedVipList = (files || []).filter(function (f) { return f && f.name && f.name.indexOf('.txt') === f.name.length - 4; })
-			.map(function (f) { return f.name.replace('.txt', '').toUpperCase(); });
-		if (State.cachedVipList && State.cachedVipList.length) {
-			await Promise.all(State.cachedVipList.map(async function (country) {
-				try {
-					var r2 = await fetchWithFallbackUI('proxy_vip/' + country + '.txt');
-					if (r2.ok) {
-						var txt = await r2.text();
-						var lines = txt.split('\\n').map(function (l) { return l.trim(); }).filter(function (l) { return l.length > 5; });
-						if (lines.length) State.cachedVipProxies[country] = lines;
-					}
-				} catch (e) { }
-			}));
-		}
-	} catch (e) { }
-}
+/* v1.0.2-beta.2: کش VIP حذف شد — فقط استخر ساکس عمومی (بدون مخزن VIP) */
+async function initVipCache() { return; }
 
 /* ============================================================
    16. VOUCHERS
@@ -16848,11 +16916,20 @@ async function runQuickCreate() {
 	if (btn) { btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
 	try {
 		var ips = '';
+		/* v1.0.2-beta: آی‌پی ساخت سریع از مخزن crowd (واقعی و تأییدشده) — نه تصادفیِ تست‌نشده */
 		try {
-			var ipRes = await api('/api/scan-ips', { method: 'POST', body: { providers: ['cf'], count: 4 } }); /* v1.0.1: قوی‌ترین = کم و گزیده */
-			var ipData = await ipRes.json().catch(function () { return {}; });
-			if (ipData && ipData.ips && ipData.ips.length) ips = ipData.ips.join('\\n');
+			var repRes = await api('/api/ip-repo');
+			var repD = await repRes.json().catch(function () { return {}; });
+			var bestIps = (repD && Array.isArray(repD.global)) ? repD.global.slice(0, 4) : [];
+			if (bestIps.length) ips = bestIps.join('\\n');
 		} catch (e) { }
+		if (!ips) {
+			try {
+				var ipRes = await api('/api/scan-ips', { method: 'POST', body: { providers: ['cf'], count: 4 } });
+				var ipData = await ipRes.json().catch(function () { return {}; });
+				if (ipData && ipData.ips && ipData.ips.length) ips = ipData.ips.join('\\n');
+			} catch (e2) { }
+		}
 		var made = [];
 		for (var k = 0; k < count; k++) {
 			var name = 'lml_' + Math.random().toString(36).slice(2, 7) + (count > 1 ? ('_' + (k + 1)) : '');
@@ -17792,6 +17869,9 @@ reseller: `<!DOCTYPE html>
 				<svg class="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
 				دریافت کـانفـیگ و اشتراک‌ها
 			</h2>
+			<div class="mb-4 p-3 rounded-md bg-blue-500/10 border border-blue-500/20 text-[11px] text-blue-300 leading-6">
+				🌍 <b>خروجی‌ات رومانی/اروپا نشان می‌دهد؟</b> طبیعی است! آی‌پی کلودفلر Anycast است و خروجی همیشه نزدیک‌ترین دیتاسنتر به توست (دلیل سرعت بالا). برای <b>کشور خروجی خاص</b> (🇩🇪 آلمان و...) فقط <b>ساکس پروکسی</b> جواب می‌دهد: از مدیر بخواه روی کانفیگ تو ساکس عمومیِ آن کشور را زنجیر کند (بخش پروکسی خروجی پنل — فقط منابع عمومی و تست‌شده).
+			</div>
 			<div class="space-y-3">
 		<button onclick="copyTextSub()" class="w-full flex justify-between items-center px-4 py-3 bg-white dark:bg-amoled-card border border-gray-200 dark:border-amoled-border hover:border-indigo-500 dark:hover:border-indigo-500 rounded-md text-xs font-medium transition shadow-sm">
 					<span class="flex items-center gap-2"><svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path></svg> کپی لینک ساب‌اسکریپشن متنی</span>
@@ -17805,6 +17885,15 @@ reseller: `<!DOCTYPE html>
 					<span class="flex items-center gap-2"><svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg> کپی کـانفـیگ‌های اتصال (مستقیم)</span>
 					<span class="text-blue-500">کپی</span>
 				</button>
+				<button onclick="rotateMyUuid(this)" class="w-full flex justify-between items-center px-4 py-3 bg-white dark:bg-amoled-card border border-gray-200 dark:border-amoled-border hover:border-rose-500 dark:hover:border-rose-500 rounded-md text-xs font-medium transition shadow-sm">
+					<span class="flex items-center gap-2">🔁 کانفیگ‌ها سوخته؟ تازه‌سازی فوری (کانفیگ کاملاً نو)</span>
+					<span class="text-rose-500">تازه‌سازی</span>
+				</button>
+				<button onclick="runConnDoctor(this)" class="w-full flex justify-between items-center px-4 py-3 bg-white dark:bg-amoled-card border border-gray-200 dark:border-amoled-border hover:border-emerald-500 dark:hover:border-emerald-500 rounded-md text-xs font-medium transition shadow-sm">
+					<span class="flex items-center gap-2">🩺 دکتر اتصال — تست زندهٔ دامنه/آی‌پی/پورت از نت خودت</span>
+					<span class="text-emerald-600">عیب‌یابی</span>
+				</button>
+				<div id="doctor-results" class="hidden p-3 rounded-md bg-zinc-900/40 dark:bg-black/30 border border-zinc-300 dark:border-zinc-700 text-[11px] leading-6"></div>
 			</div>
 		</div>
 	</div>
@@ -17996,6 +18085,69 @@ ${COMMON_TOAST_HTML}
 			}
 			lmlCopy(t, '✅ کانفیگ‌ها کپی شد! در برنامه خود پیست کنید');
 		}
+		/* 🩺 دکتر اتصال — عیب‌یابی زنده از نت خودِ کاربر (بدون سرور) */
+		function docProbe(hostport, timeoutMs) {
+			return new Promise(function (resolve) {
+				var t0 = performance.now();
+				var ctl = new AbortController();
+				var timer = setTimeout(function () { try { ctl.abort(); } catch (e) { } }, timeoutMs);
+				var done = false;
+				function fin(cls) { if (done) return; done = true; clearTimeout(timer); resolve({ cls: cls, ms: Math.round(performance.now() - t0) }); }
+				fetch('https://' + hostport + '/lml-scanner/probe?nonce=0123456789abcdef01234567', { mode: 'no-cors', cache: 'no-store', signal: ctl.signal })
+					.then(function () { fin('open'); })
+					.catch(function (e) {
+						var ms = performance.now() - t0;
+						if (e && e.name === 'AbortError') fin('timeout');
+						else fin(ms < 130 ? 'rst' : 'cert');
+					});
+			});
+		}
+		async function runConnDoctor(btn) {
+			var box = document.getElementById('doctor-results');
+			if (!box) return;
+			if (btn) btn.disabled = true;
+			box.classList.remove('hidden');
+			box.innerHTML = '🩺 دکتر در حال معاینهٔ اتصال تو است... (اول پایهٔ نتت را اندازه می‌گیرم)';
+			var u = window.statusUser || {};
+			var base = 0;
+			for (var b = 0; b < 2; b++) {
+				try { var t0 = performance.now(); await fetch('/api/ping?d=' + b + Date.now(), { cache: 'no-store' }); var ms0 = Math.round(performance.now() - t0); if (!base || ms0 < base) base = ms0; } catch (e) { }
+			}
+			var rstMax = Math.max(70, Math.round((base || 120) * 0.45));
+			var targets = [{ label: '🌐 دامنهٔ پنل', hp: window.location.host }];
+			var ips = (Array.isArray(u.ips_valid) ? u.ips_valid : []).slice(0, 4);
+			var ports = String(u.port || '443').split(',').map(function (x) { return x.trim(); }).filter(Boolean).slice(0, 2);
+			if (!ports.length) ports = ['443'];
+			ips.forEach(function (ip) { ports.forEach(function (p) { targets.push({ label: ip + ':' + p, hp: ip + ':' + p }); }); });
+			var out = [];
+			for (var i = 0; i < targets.length; i++) {
+				box.innerHTML = '🩺 تست ' + (i + 1) + ' از ' + targets.length + ' — ' + targets[i].label + '<br><br>' + out.join('<br>');
+				var r1 = await docProbe(targets[i].hp, 3000);
+				var cls = r1.cls;
+				if (cls === 'cert' && r1.ms < rstMax) cls = 'rst';
+				out.push((cls === 'cert' || cls === 'open')
+					? ('✅ ' + targets[i].label + ' — زنده (' + r1.ms + 'ms)')
+					: (cls === 'rst' ? ('⛔ ' + targets[i].label + ' — بسته توسط اپراتور (RST)') : ('⛔ ' + targets[i].label + ' — تایم‌اوت/فیلتر')));
+			}
+			var alive = out.filter(function (x) { return x.indexOf('✅') === 0; }).length;
+			var verdict;
+			if (alive === targets.length) verdict = '🟢 عالی! همهٔ مسیرها از نت تو زنده‌اند. اگر اپ وصل نمی‌شود، ساب را در اپ بروزرسانی کن یا «تازه‌سازی فوری» را بزن.';
+			else if (alive > 0) verdict = '🟡 ' + alive + ' مسیر از ' + targets.length + ' مسیر زنده است — اپ را روی کانفیگ✅دار بگذار یا ساب را بروزرسانی کن تا بهترین‌ها بالا بیایند.';
+			else verdict = '🔴 هیچ مسیری روی نت تو زنده نیست — احتمالاً اپراتورت موقتاً دامنه/آی‌پی‌ها را بسته. چند دقیقه دیگر دوباره تست کن؛ اگر درست نشد به مدیر خبر بده.';
+			box.innerHTML = '<b>🩺 نتیجهٔ معاینه (پایهٔ نت تو: ' + (base || '?') + 'ms):</b><br>' + out.join('<br>') + '<br><br>' + verdict;
+			if (btn) btn.disabled = false;
+		}
+		async function rotateMyUuid(btn) {
+			if (!confirm('کانفیگ‌های فعلی کاملاً باطل و کانفیگ نو ساخته می‌شود (باید در اپ پیست کنی). ادامه بدم؟')) return;
+			var old = btn.innerHTML;
+			try {
+				btn.disabled = true;
+				var r = await fetch('/api/rotate-uuid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: window.statusUser.username, token: String(window.statusUser.uuid || '').slice(-8) }) });
+				var d = await r.json().catch(function () { return {}; });
+				if (r.ok && d.success) { alert('✅ کانفیگ‌ها تازه شد! صفحه رفرش می‌شود — کانفیگ نو را کپی کن.'); setTimeout(function () { window.location.reload(); }, 1600); }
+				else { alert('❌ ' + (d.error || 'خطا در تازه‌سازی')); btn.disabled = false; }
+			} catch (e) { alert('❌ خطای ارتباط با سرور'); btn.disabled = false; }
+		}
 		function copyTextSub() {
 			const link = window.location.protocol + '//' + lmlHostSafe() + '/sub/' + encodeURIComponent(window.statusUser.username);
 			lmlCopy(link);
@@ -18086,7 +18238,7 @@ ${COMMON_TOAST_HTML}
 				if (u.colo_cc) {
 					var exEl = document.getElementById('display-exit');
 					if (exEl) {
-						exEl.innerHTML = '📍 خروجی واقعی اینترنت تو: ' + (u.colo_flag || '🌐') + ' ' + u.colo_cc + (u.colo ? ' — دیتاسنتر کلودفلر ' + u.colo : '') + ' (نزدیک‌ترین به تو)';
+						exEl.innerHTML = '📍 خروجی واقعی اینترنت تو: ' + (u.colo_flag || '🌐') + ' ' + u.colo_cc + (u.colo ? ' — دیتاسنتر کلودفلر ' + u.colo : '') + (u.operator ? ' • نت تو: ' + u.operator : '') + ' (نزدیک‌ترین به تو — طبیعی است)';
 						exEl.style.display = 'block';
 					}
 				}
