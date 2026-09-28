@@ -1,5 +1,5 @@
 import { connect } from "cloudflare:sockets";
-const LML_SCANNER_RELEASE = {"version": "1.0.1", "build": "exit-flag-20260926", "notes": ["📍 پرچم خروجی واقعی: ریمارک کانفیگ‌ها و صفحهٔ کاربر حالا کشور دیتاسنتر کلودفلر (خروجی واقعی تو) را نشان می‌دهد — نه محل ثبت آی‌پی Anycast (آمریکا) که گمراه‌کننده بود","🎯 اسکنر هدف‌محور — تعداد آی‌پی تمیز درخواستی را کامل پیدا می‌کند","🔔 آپدیت فقط با اعلان و تأیید مدیر","🚀 اسکنر غول با پراکندگی جهانی + 🫀 پایش زندهٔ آی‌پی‌ها","📉 ساب کم‌مصرف + ⚡ ساخت سریع قوی‌ترین کانفیگ + طراحی جدید صفحه رمز عبور"]};
+const LML_SCANNER_RELEASE = {"version": "1.0.3", "build": "giant-frag-20260928", "notes": ["🛡 موتور غول (قوی و بزرگ): فرگمنت 80-160 با جیتر 10-20 — حداکثر محافظت اتصال، با پیام‌های کاملاً مؤدب و روشن", "🧠 بهینه‌ساز خودکار فرگمنت per-اپراتور (همراه‌اول/ایرانسل/رایتل) + سوییچ خاموش/روشن در بخش فرگمنت", "🔗 ساب چندنقطه‌ای پایدار، اتصال 0-RTT (ed=2048)، اثرانگشت تصادفی TLS و تب پروکسی عمومی سر جایشان", "📲 این نسخه از طریق خودِ پنل قابل بروزرسانی است (تنظیمات → بروزرسانی)"]};
 
 function safeWaitUntil(ctx, promise) {
 	if (ctx && typeof ctx.waitUntil === "function") {
@@ -11,7 +11,7 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1";
+const LML_PANEL_VERSION = "1.0.3";
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -194,6 +194,45 @@ function lmlIpInCfWide(ip, bgpList) {
 	if (n < 0 || !bgpList || !bgpList.length) return "";
 	for (let i = 0; i < bgpList.length; i++) if (lmlCidrHas(bgpList[i], n)) return "bgp";
 	return "";
+}
+/* ============================================================
+   ⚡ STRONG MODE v1.0.2 — «کانفیگ قوی» یک گزینه، همهٔ لایه‌ها باهم
+   ترکیب بقا: آی‌پی تمیز + دامنه + دامنه‌های زاپاس + چند پورت +
+   فرگمنت سنگین tlshello + اثرانگشت تصادفی + حذف خودکار آی‌پی
+   مردهٔ crowd. پیش‌فرض: روشن. IPv4-اول (v6 در ایران بسته است).
+   ============================================================ */
+let LML_FRAGOPT_MEM = { at: 0, on: null };
+async function lmlFragOptOn(env) {
+	const now = Date.now();
+	if (LML_FRAGOPT_MEM.on !== null && (now - LML_FRAGOPT_MEM.at) < 60000) return LML_FRAGOPT_MEM.on;
+	let on = true;
+	try {
+		const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_frag_opt'").first();
+		if (row && row.value !== null && row.value !== undefined) on = row.value === '1';
+	} catch (e) { }
+	LML_FRAGOPT_MEM = { at: now, on: on };
+	return on;
+}
+/* 🧠 پریست‌های فرگمنت per-اپراتور (دانش جامعهٔ کاربری ایران) */
+const LML_OP_FRAG = {
+	mci: { len: "100-200", int: "5-10" },
+	irancell: { len: "80-160", int: "10-20" },
+	rightel: { len: "120-250", int: "4-8" },
+	other: { len: "100-200", int: "5-10" }
+};
+function lmlOpFrag(asOrg) {
+	const o = String(asOrg || "").toLowerCase();
+	if (o.indexOf("irancell") >= 0 || o.indexOf("mtn") >= 0) return LML_OP_FRAG.irancell;
+	if (o.indexOf("rightel") >= 0) return LML_OP_FRAG.rightel;
+	if (o.indexOf("telecommunication") >= 0 || o.indexOf("mci") >= 0 || o.indexOf("tci") >= 0) return LML_OP_FRAG.mci;
+	return LML_OP_FRAG.other;
+}
+async function lmlGetSpareDomains(env) {
+	try {
+		const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_spare_domains'").first();
+		if (!row || !row.value) return [];
+		return String(row.value).split(/[\s,]+/).map(function (x) { return x.trim().toLowerCase(); }).filter(function (x) { return x && x.indexOf(".") > 0 && x.length < 100; }).slice(0, 3);
+	} catch (e) { return []; }
 }
 function lmlOnlyCfIps(list, limit) {
 	const out = [];
@@ -494,10 +533,10 @@ function lmlCrowdSummary(db, ip) {
 	try {
 		const regs = (db && db[ip]) ? db[ip] : null;
 		if (!regs) return null;
-		let n = 0, ok = 0, rc = 0;
-		for (const k in regs) { rc++; n += (regs[k].n || 0); ok += (regs[k].ok || 0); }
+		let n = 0, ok = 0, rc = 0, msSum = 0;
+		for (const k in regs) { rc++; n += (regs[k].n || 0); ok += (regs[k].ok || 0); msSum += (regs[k].msSum || 0); }
 		if (!n) return null;
-		return { pct: Math.round((ok / n) * 100), n: n, regions: rc };
+		return { pct: Math.round((ok / n) * 100), n: n, regions: rc, ms: ok ? Math.round(msSum / ok) : null };
 	} catch (e) { return null; }
 }
 /* کشور آی‌پی (برای پرچم) — best-effort، هرگز خطا نمی‌دهد */
@@ -1377,43 +1416,26 @@ async function replaceBrokenProxy(username, env, oldProxy) {
 		let newProxy = null;
 		let finalCountry = null;
 		const upperCountry = (countryCode || "ALL").toUpperCase();
-		const sources = [];
-		const isOldProxyVIP = oldProxy.includes("@") || oldProxy.includes("t.me/");
-		
-		if (cachedVipCountries.length === 0 || Date.now() - lastVipCountriesFetch > 3600000) {
-			try {
-				const ghRes = await fetchWithFallback("vip-list", {
-					headers: { "User-Agent": "Mozilla/5.0" },
-				});
-				if (ghRes.ok) {
-					const files = await ghRes.json();
-					cachedVipCountries = files.filter((f) => f.name.endsWith(".txt")).map((f) => f.name.replace(".txt", "").toUpperCase());
-					lastVipCountriesFetch = Date.now();
-				}
-			} catch (e) { }
-		}
-		
-		let fallbackVIPs = cachedVipCountries.length > 0 ? [...cachedVipCountries] : ["DE", "US", "GB", "NL", "FR", "TR"];
-		for (let i = fallbackVIPs.length - 1; i > 0; i--) {
-			const j = Math.floor(Math.random() * (i + 1));
-			[fallbackVIPs[i], fallbackVIPs[j]] = [fallbackVIPs[j], fallbackVIPs[i]];
-		}
-		
-		if (upperCountry !== "ALL" && upperCountry !== "UN") {
-			sources.push({ url: `proxy_vip/${upperCountry}.txt`, type: "repo", country: upperCountry });
-		}
-		for (const fc of fallbackVIPs) {
-			if (fc !== upperCountry) {
-				sources.push({ url: `proxy_vip/${fc}.txt`, type: "repo", country: fc });
-			}
-		}
-		
-		if (!isOldProxyVIP) {
+		/* فقط منابع عمومی: استخر ساکس عمومیِ تست‌شده (handshake+CONNECT+پینگ) — بدون مخزن VIP */
+		try {
+			const pubPool = await lmlGetSocksRepo(false);
+			let candsPub = (pubPool && Array.isArray(pubPool.proxies)) ? pubPool.proxies.slice() : [];
 			if (upperCountry !== "ALL" && upperCountry !== "UN") {
-				sources.push({ url: `proxy/${upperCountry}.txt`, type: "repo", country: upperCountry });
+				const inCc = candsPub.filter(function (p) { return String(p.cc || "").toUpperCase() === upperCountry; });
+				if (inCc.length) candsPub = inCc;
 			}
-			sources.push({ url: `proxy/ALL.txt`, type: "repo", country: "ALL" });
-		}
+			candsPub.sort(function (a, b) { return (a.ms || 99999) - (b.ms || 99999); });
+			if (candsPub.length) {
+				const pickPub = candsPub[Math.floor(Math.random() * Math.min(5, candsPub.length))];
+				const hpPub = String((pickPub && (pickPub.hp || pickPub.proxy)) || "").replace(/^(socks4|socks5|socks|http|https):\/\//i, "");
+				if (hpPub) {
+					newProxy = "socks5://" + hpPub;
+					finalCountry = (String((pickPub && pickPub.cc) || "").toUpperCase()) || (upperCountry === "ALL" ? null : upperCountry);
+				}
+			}
+		} catch (e) { }
+		const sources = [];
+		const isOldProxyVIP = false; /* مخزن VIP حذف شد */
 		
 		for (const src of sources) {
 			try {
@@ -1854,7 +1876,7 @@ const Router = {
 				   دکمهٔ «کپی VLESS» همان لینک‌ها را کپی کند (نه لینک ساب!) */
 				let portalLinks = "";
 				try {
-					const subRespP = await SubscriptionService.generateText(user, host, ctx, env, String((request.cf && request.cf.colo) || ""), lmlCrowdRegion(request));
+					const subRespP = await SubscriptionService.generateText(user, host, ctx, env, String((request.cf && request.cf.colo) || ""), lmlCrowdRegion(request), String((request.cf && request.cf.asOrganization) || ""));
 					const b64P = await subRespP.text();
 					try { portalLinks = decodeURIComponent(escape(atob(b64P))); } catch (eD) { try { portalLinks = atob(b64P); } catch (eD2) { portalLinks = ""; } }
 				} catch (eP) { }
@@ -1874,7 +1896,7 @@ const Router = {
 			if (url.pathname.startsWith("/singbox/") || format === "singbox" || ua.includes("sing-box")) {
 				return await SubscriptionService.generateSingbox(user, host);
 			}
-			return await SubscriptionService.generateText(user, host, ctx, env, String((request.cf && request.cf.colo) || ""), lmlCrowdRegion(request));
+			return await SubscriptionService.generateText(user, host, ctx, env, String((request.cf && request.cf.colo) || ""), lmlCrowdRegion(request), String((request.cf && request.cf.asOrganization) || ""));
 		} catch (err) {
 			return new Response("Error building config: " + err.message, { status: 500 });
 		}
@@ -1947,7 +1969,7 @@ const Router = {
 			}
 			let plainLinks = "";
 			try {
-				const subResponse = await SubscriptionService.generateText(user, url.hostname, ctx, env, String((request.cf && request.cf.colo) || ""), lmlCrowdRegion(request));
+				const subResponse = await SubscriptionService.generateText(user, url.hostname, ctx, env, String((request.cf && request.cf.colo) || ""), lmlCrowdRegion(request), String((request.cf && request.cf.asOrganization) || ""));
 				const subBase64 = await subResponse.text();
 				try {
 					plainLinks = decodeURIComponent(escape(atob(subBase64)));
@@ -2623,6 +2645,23 @@ const Router = {
 				if (ranges[p].length && status[p] !== "static") status[p] = "fallback";
 			});
 			return { ranges: ranges, status: status };
+		}
+		if (url.pathname === "/api/frag-opt" && (request.method === "GET" || request.method === "POST")) {
+			try {
+				const session = await DbService.getSession(request, env);
+				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
+				if (request.method === "GET") {
+					const on = await lmlFragOptOn(env);
+					return new Response(JSON.stringify({ success: true, on: on }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+				}
+				const body = await readJsonBody(request);
+				const v = body.on ? '1' : '0';
+				await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lml_frag_opt', ?)").bind(v).run();
+				LML_FRAGOPT_MEM = { at: 0, on: null };
+				return new Response(JSON.stringify({ success: true, on: !!body.on }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
+			} catch (e) {
+				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+			}
 		}
 		if (url.pathname === "/api/cf-ranges" && request.method === "GET") {
 			/* GIANT: تمام رنج‌های کلودفلر — رسمی + جدید تأییدشده + لایهٔ زندهٔ BGP جهانی */
@@ -3615,7 +3654,7 @@ const Router = {
 					success: true,
 					current: LML_PANEL_VERSION,
 					latest: latest,
-					has_update: cmp !== 0,
+					has_update: cmp > 0, /* فقط وقتی گیت‌هاب جدیدتر است — دیگر پیشنهاد تنزل نمی‌دهد */
 					source_ok: LML_UPDATE_CHECK_CACHE.source,
 					size: LML_UPDATE_CHECK_CACHE.size
 				}), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
@@ -4829,7 +4868,8 @@ rules:
 				"utls": { "enabled": true, "fingerprint": String(user.fingerprint || "chrome") },
 				"fragment": { "packets": fragPackets, "length": fragLen, "mode": "random" }
 			},
-			"transport": { "type": "ws", "path": path, "headers": { "Host": host } }
+			"transport": { "type": "ws", "path": path, "headers": { "Host": host }, "max_early_data": 2048, "early_data_header_name": "Sec-WebSocket-Protocol" },
+			"tcp_fast_open": true
 		};
 		if (detourTag) vlessOut.detour = detourTag;
 		const routeRules = [];
@@ -4873,7 +4913,7 @@ rules:
 		});
 	},
 
-	async generateText(user, host, ctx = null, env = null, coloHint = "", regionKey = "") {
+	async generateText(user, host, ctx = null, env = null, coloHint = "", regionKey = "", asOrgHint = "") {
 		const _AI_BLOCKER = atob("TE1MX1BBTkVMX0NPUkVfU1lTVEVNX1JFQURZ");
 		let ips = [host];
 		/* IP-FREE: آی‌پی‌های خود کاربر همیشه اول است؛ چرخش خودکار فقط «اضافه» می‌کند */
@@ -4938,6 +4978,15 @@ rules:
 		   و فایل ساب کوچک‌تر می‌شود. لینک دامنه همیشه هست. */
 		try { lmlTlsIps = lmlTlsIps.slice(0, 4); } catch (e) { }
 		ports = ports.slice(0, 2);
+		/* 🧠 بهینه‌ساز فرگمنت: کاربرِ بدون فرگمنت دستی ⇒ پریست اپراتورش خودکار روی لینک‌ها */
+		try {
+			if (env && (!user.frag_len || !user.frag_int) && (await lmlFragOptOn(env))) {
+				const ofx = lmlOpFrag(asOrgHint);
+				user = Object.assign({}, user, { frag_len: ofx.len, frag_int: ofx.int });
+			}
+		} catch (e) { }
+		let spareDomains = [];
+		try { if (env) spareDomains = await lmlGetSpareDomains(env); } catch (e) { }
 		const fpPool = ["chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq"];
 		const fpRawGt = String(user.fingerprint || "chrome").toLowerCase();
 		const fp = (fpRawGt === "random" || fpRawGt === "randomized") ? fpPool[Math.floor(Math.random() * fpPool.length)] : (user.fingerprint || "chrome");
@@ -5082,6 +5131,9 @@ rules:
 			ports.forEach((portStr) => { lmlEntries.push({ addr: ipClean, port: portStr, tls: true, ip: ipClean }); });
 		});
 		ports.forEach((portStr) => { lmlEntries.push({ addr: lmlHost, port: portStr, tls: true, ip: "" }); });
+		if (spareDomains.length) {
+			spareDomains.forEach((sd) => { ports.forEach((portStr) => { lmlEntries.push({ addr: sd, port: portStr, tls: true, ip: "", sni: sd }); }); });
+		}
 		lmlEntries.forEach((entry) => {
 			resolvedProxies.forEach((proxy) => {
 					const ip = entry.addr;
@@ -5105,15 +5157,17 @@ rules:
 					if (user.tls_mask) userFrag += "&mask=" + encodeURIComponent(user.tls_mask);
 						
 					const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
-					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + lmlHost) : "";
+					const fpUse = fpPool[Math.floor(Math.random() * fpPool.length)]; /* اثرانگشت تصادفی (ضدفسیلترینگ) */
+					const sniUse = entry.sni || lmlHost;
+					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fpUse + "&allowInsecure=" + insecureFlag + "&sni=" + sniUse) : "";
 
 					if (enableVless) {
 						const remark = remarkBase;
-						links.push("vl" + "e" + "ss://" + user.uuid + "@" + ipU + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&encryption=none&host=" + host + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(remark));
+						links.push("vl" + "e" + "ss://" + user.uuid + "@" + ipU + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&encryption=none&host=" + (entry.sni || host) + "&type=ws" + tlsParams + userFrag + "&ed=2048#" + encodeURIComponent(remark));
 					}
 					if (enableTrojan) {
 						const trojanRemark = remarkBase;
-						links.push("trojan://" + user.uuid + "@" + ipU + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&host=" + lmlHost + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(trojanRemark));
+						links.push("trojan://" + user.uuid + "@" + ipU + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&host=" + (entry.sni || lmlHost) + "&type=ws" + tlsParams + userFrag + "&ed=2048#" + encodeURIComponent(trojanRemark));
 					}
 					if (enableSS) {
 						const ssRemark = remarkBase;
@@ -5976,28 +6030,17 @@ async function handlevIees(env, storedData = null, ctx = null, request = null) {
 							);
 
 							if (_isSelfLoop) {
-								// Refresh VIP bypass pool at most once per hour (same strategy as Zeus).
+								/* فقط عمومی: استخر بای‌پس از ساکس عمومی تست‌شده پر می‌شود (هر ۱ ساعت) */
 								if (!GLOBAL_IPS_CACHE.loop_bypass || Date.now() - (GLOBAL_IPS_CACHE.loop_last_fetch || 0) > 3600000) {
 									GLOBAL_IPS_CACHE.loop_bypass = [];
-									let targetCountries = ["DE", "US", "GB", "NL", "FR"];
 									try {
-										const vipRes = await fetchWithFallback("vip-list");
-										if (vipRes && vipRes.ok) {
-											const files = await vipRes.json();
-											const fetched = files.filter(f => f.name && f.name.endsWith(".txt")).map(f => f.name.replace(".txt","").toUpperCase());
-											if (fetched.length > 0) targetCountries = fetched;
-										}
+										const pubPoolL = await lmlGetSocksRepo(false);
+										const plistL = (pubPoolL && Array.isArray(pubPoolL.proxies)) ? pubPoolL.proxies : [];
+										GLOBAL_IPS_CACHE.loop_bypass = plistL.slice(0, 30).map(function (pL) {
+											const hpL = String((pL && (pL.hp || pL.proxy)) || "").replace(/^(socks4|socks5|socks|http|https):\/\//i, "");
+											return hpL ? ("socks5://" + hpL) : null;
+										}).filter(Boolean);
 									} catch(_) {}
-									targetCountries = targetCountries.sort(() => 0.5 - Math.random()).slice(0, 3);
-									for (const fc of targetCountries) {
-										try {
-											const res = await fetchWithFallback("proxy_vip/" + fc + ".txt");
-											if (res && res.ok) {
-												const lines = (await res.text()).split("\n").map(l => l.trim()).filter(l => l.length > 5);
-												if (lines.length > 0) GLOBAL_IPS_CACHE.loop_bypass = GLOBAL_IPS_CACHE.loop_bypass.concat(lines);
-											}
-										} catch(_) {}
-									}
 									if (GLOBAL_IPS_CACHE.loop_bypass.length > 0) GLOBAL_IPS_CACHE.loop_last_fetch = Date.now();
 								}
 								const bypassPool = (GLOBAL_IPS_CACHE.loop_bypass || []).slice().sort(() => 0.5 - Math.random()).slice(0, 4);
@@ -6121,6 +6164,23 @@ async function handlevIees(env, storedData = null, ctx = null, request = null) {
 	serverSock.addEventListener("error", (err) => {
 		handleWsError(err);
 	});
+	/* ⚡ 0-RTT early-data (xray/sing-box ed=2048): نخستین بستهٔ کاربر داخل هدِر
+	   Sec-WebSocket-Protocol می‌رسد؛ قبل از بازگشت 101 به جریان تزریق می‌شود تا
+	   هر اتصال یک RTT کامل جلوتر بیفتد — حیاتی روی پینگ بالا/آنتن کم. */
+	try {
+		const edHdr = request ? (request.headers.get("Sec-WebSocket-Protocol") || "") : "";
+		if (edHdr) {
+			const edB64 = edHdr.split(",")[0].trim();
+			if (edB64) {
+				const edNorm = edB64.replace(/-/g, "+").replace(/_/g, "/");
+				const edPad = edNorm.length % 4 === 0 ? edNorm : edNorm + "====".slice(edNorm.length % 4);
+				const edBin = Uint8Array.from(atob(edPad), function (c) { return c.charCodeAt(0); });
+				if (edBin.length && edBin.length <= 4096) {
+					pushToChain(async () => { await processWsMessage(edBin.buffer); });
+				}
+			}
+		}
+	} catch (e) { }
 	return new Response(null, { status: 101, webSocket: clientSock });
 }
 let CF_USAGE_CACHE = null;
@@ -8485,11 +8545,9 @@ const HTML_TEMPLATES = {
 
 	html.grayscale-active { filter: grayscale(100%); }
 
-	/* بخش پروکسی خروجی کاملاً برداشته شد — المان‌ها در DOM می‌مانند تا ذخیره/لود کاربرها هرگز نشکند */
-	#vtab-proxy { display: none !important; }
-
-	/* بخش کاربر و پروکسی خروجی: فقط فرم خالی و تمیز — متن‌های توضیحی اضافه حذف */
+	/* بخش کاربر: فرم تمیز — توضیحات اضافه پنهان؛ به‌جز تب پروکسی که کامل و خوانا نمایش می‌شود */
 	#modalUser .sr-d, #modalUser .hint, #modalUser .note { display: none !important; }
+	#vtab-proxy .sr-d, #vtab-proxy .hint, #vtab-proxy .note { display: block !important; }
 	#modalUser .acc-body .field > label + .hint { display: none !important; }
 
 	/* ---- پنج تم جدید LML (همه بر پایهٔ طرح تیره — خوانایی کامل) ---- */
@@ -10682,6 +10740,7 @@ const HTML_TEMPLATES = {
 					<div class="vtabs-nav" id="userVtabs">
 						<button type="button" class="vtab active" data-vtab="vtab-account"><span class="vnum">۱</span><span>اطلاعات حساب</span></button>
 						<button type="button" class="vtab" data-vtab="vtab-network"><span class="vnum">۲</span><span>پورت و شبکه</span></button>
+					<button type="button" class="vtab" data-vtab="vtab-proxy"><span class="vnum">۳</span><span>تنظیم پروکسی و کشور</span></button>
 					</div>
 
 					<div class="vtabs-body">
@@ -10852,6 +10911,16 @@ const HTML_TEMPLATES = {
 								<button type="button" class="btn btn-sm" data-eng="light">🪶 موتور سبک</button>
 								<button type="button" class="btn btn-sm" data-eng="medium">⚙️ موتور متوسط</button>
 								<button type="button" class="btn btn-sm btn-primary" data-eng="heavy">🚀 موتور سنگین (نت ایران)</button>
+								<button type="button" class="btn btn-sm" data-eng="giant">🛡 موتور غول (قوی و بزرگ)</button>
+							</div>
+							<div class="switch-row" style="margin-top:10px">
+								<div class="sr-text">
+									<div class="sr-t">🧠 بهینه‌ساز خودکار فرگمنت (per-اپراتور)</div>
+									<div class="sr-d">کاربری که فرگمنت دستی ندارد، هنگام دریافت ساب به‌صورت خودکار پریست اپراتورش (همراه‌اول/ایرانسل/رایتل/سایر) را می‌گیرد — بدون هیچ تنظیمی</div>
+								</div>
+								<label class="switch"><input type="checkbox" id="fFragOpt" onchange="saveFragOpt(this.checked)"><i></i></label>
+							</div>
+							<div style="display:none" id="fragEngRowClose">
 							</div>
 							<div id="fragBox" class="hidden">
 								<div class="form-row">
@@ -10899,6 +10968,8 @@ const HTML_TEMPLATES = {
 
 						<!-- ---------- STEP 3 : PROXY ---------- -->
 						<div class="vtab-pane hidden" id="vtab-proxy">
+							<div class="note" style="margin-bottom:10px"><svg><use href="#i-info"/></svg><div>پروکسی‌ها <b>فقط از منابع عمومیِ زنده</b> اسکن و با تست واقعی (handshake + CONNECT + پینگ) انتخاب می‌شوند — بدون هیچ مخزن VIP. پروکسی انتخابی به کانفیگ کاربر زنجیر می‌شود و کشور خروجی او را تعیین می‌کند؛ کانفیگ‌های زنجیره‌ای 🌐 به‌دلیل آی‌پی ثابت، برای سایت‌های حساس به لوکیشن مناسب‌ترند.</div></div>
+							<div class="note warn" style="margin-bottom:12px"><svg><use href="#i-alert"/></svg><div>هشدار: هنگام اتصال به کانفیگ‌های 🌐 (پروکسی‌دار)، از باز کردن پنل با همان اتصال خودداری کنید (باعث قطع و اختلال در عملکرد پنل می‌شود).</div></div>
 							<div class="grid g-3" style="margin-bottom:14px">
 								<div class="kv"><span class="k">پینگ شما به کلودفلر</span><span class="v" id="pingClient2">—</span></div>
 								<div class="kv"><span class="k">کلودفلر به نت آزاد</span><span class="v" id="pingServer2">—</span></div>
@@ -11216,7 +11287,7 @@ const HTML_TEMPLATES = {
 	</div>
 </div>
 
-<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.1 • همه‌چیز داخل پنل — بدون ابزار ترمینال</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
+<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.3 • همه‌چیز داخل پنل</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
 <h4 style="margin-top:2px">🚀 اسکنر غول — شکارچی لبهٔ کلودفلر (روی اینترنت خودتان)</h4>
 <div class="note"><svg><use href="#i-info"/></svg><div>بدون نیاز به هیچ ابزار اضافه — موتور <b>همین‌جا در مرورگر، روی نت خودتان</b> اجرا می‌شود: نامزدها از مخزن غول پنل + رنج‌های زندهٔ کلودفلر (رسمی، جدید و BGP جهانی) جمع می‌شوند، و بعد <b>دسته‌دسته تا رسیدن به عدد هدف شما</b> (مثلاً دقیقاً ۶۰ آی‌پی تمیز) به جست‌وجو ادامه می‌دهد؛ هر آی‌پی با <b>بازآزمون دقیق ۳ دوره</b> تأیید می‌شود. معیار تمیزی: کامل‌شدن handshake (خطا از جنس گواهی = لبه جواب داده)، نه timeouts و نه RST اپراتور. ✅ پرچم نتایج = <b>محل ثبت آی‌پی</b> (آی‌پی Anycast کلودفلر معمولاً آمریکا ثبت شده) — <b>خروجی واقعی اتصال</b>، نزدیک‌ترین دیتاسنتر کلودفلر به توست که در صفحهٔ کاربر و ریمارک کانفیگ نشان داده می‌شود.</div></div>
 <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0;font-size:12px">
@@ -11426,7 +11497,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1';
+var CURRENT_VERSION = '1.0.3';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -13156,8 +13227,8 @@ function renderPortCheckboxes(selected) {
 		return '<label class="port-chip nontls"><input type="checkbox" name="ports" value="' + p + '"' + (on ? ' checked' : '') + '><span>' + p + '</span></label>';
 	}).join('');
 }
-var USER_STEPS = ['vtab-account', 'vtab-network'];
-var USER_STEP_FA = ['۱', '۲'];
+var USER_STEPS = ['vtab-account', 'vtab-network', 'vtab-proxy'];
+var USER_STEP_FA = ['۱', '۲', '۳'];
 function setUserModalTab(id) {
 	if (USER_STEPS.indexOf(id) < 0) id = USER_STEPS[0];
 	$$('#userVtabs .vtab').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-vtab') === id); });
@@ -13390,6 +13461,20 @@ async function testUserSocksProxy() {
 }
 window.testUserSocksProxy = testUserSocksProxy;
 on($('btnTestProxies'), 'click', testUserSocksProxy);
+/* 🧠 بهینه‌ساز فرگمنت: سوییچ سراسری */
+function saveFragOpt(onV) {
+	api('/api/frag-opt', { method: 'POST', body: { on: onV ? 1 : 0 } }).then(function () {
+		toast(onV ? '🧠 بهینه‌ساز فرگمنت روشن شد — از این به بعد هر کاربر بدون فرگمنت دستی، پریست اپراتورش را می‌گیرد.' : '🧠 بهینه‌ساز فرگمنت خاموش شد.', 'ok', 7000);
+	}).catch(function () { toast('❌ ذخیره نشد.', 'err'); });
+}
+window.saveFragOpt = saveFragOpt;
+(async function () {
+	try {
+		var dF = await (await api('/api/frag-opt')).json().catch(function () { return {}; });
+		var elF = $('fFragOpt');
+		if (elF) elF.checked = dF.on !== false;
+	} catch (e) { }
+})();
 
 async function testDirectPing() {
 	var cEl = $('pingClient'), sEl = $('pingServer'), stEl = $('pingState');
@@ -14377,6 +14462,10 @@ document.addEventListener('click', function (e) {
 		vset('fFragLen', '200-3000'); vset('fFragInt', '1-2');
 		if (tg && !tg.checked) tg.click();
 		toast('⚙️ موتور متوسط فعال شد (پیش‌فرض).', 'ok');
+	} else if (m === 'giant') {
+		vset('fFragLen', '80-160'); vset('fFragInt', '10-20');
+		if (tg && !tg.checked) tg.click();
+		toast('🛡 موتور غول فعال شد — حداکثر محافظت از اتصال در شرایط پرفشار شبکه؛ پایدار و بهینه برای همهٔ اپراتورها.', 'ok', 10000);
 	} else {
 		vset('fFragLen', '100-300'); vset('fFragInt', '8-12');
 		if (tg && !tg.checked) tg.click();
@@ -14384,28 +14473,8 @@ document.addEventListener('click', function (e) {
 	}
 });
 
-/* VIP proxy cache (used to highlight known-good proxy links) */
-async function initVipCache() {
-	try {
-		var res = await fetchWithFallbackUI('vip-list');
-		if (!res.ok) return;
-		var files = await res.json();
-		State.cachedVipList = (files || []).filter(function (f) { return f && f.name && f.name.indexOf('.txt') === f.name.length - 4; })
-			.map(function (f) { return f.name.replace('.txt', '').toUpperCase(); });
-		if (State.cachedVipList && State.cachedVipList.length) {
-			await Promise.all(State.cachedVipList.map(async function (country) {
-				try {
-					var r2 = await fetchWithFallbackUI('proxy_vip/' + country + '.txt');
-					if (r2.ok) {
-						var txt = await r2.text();
-						var lines = txt.split('\\n').map(function (l) { return l.trim(); }).filter(function (l) { return l.length > 5; });
-						if (lines.length) State.cachedVipProxies[country] = lines;
-					}
-				} catch (e) { }
-			}));
-		}
-	} catch (e) { }
-}
+/* فقط عمومی — کش VIP حذف شد (استخر ساکس عمومی جایگزین است) */
+async function initVipCache() { return; }
 
 /* ============================================================
    16. VOUCHERS
