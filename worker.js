@@ -1,5 +1,5 @@
 import { connect } from "cloudflare:sockets";
-const LML_SCANNER_RELEASE = {"version": "1.0.3", "build": "giant-frag-20260928", "notes": ["🛡 موتور غول (قوی و بزرگ): فرگمنت 80-160 با جیتر 10-20 — حداکثر محافظت اتصال، با پیام‌های کاملاً مؤدب و روشن", "🧠 بهینه‌ساز خودکار فرگمنت per-اپراتور (همراه‌اول/ایرانسل/رایتل) + سوییچ خاموش/روشن در بخش فرگمنت", "🔗 ساب چندنقطه‌ای پایدار، اتصال 0-RTT (ed=2048)، اثرانگشت تصادفی TLS و تب پروکسی عمومی سر جایشان", "📲 این نسخه از طریق خودِ پنل قابل بروزرسانی است (تنظیمات → بروزرسانی)"]};
+const LML_SCANNER_RELEASE = {"version": "1.0.1 بتا", "build": "giant-frag-beta-20260928", "notes": ["🛡 موتور غول (قوی و بزرگ): فرگمنت 80-160 با جیتر 10-20 — حداکثر محافظت اتصال، با پیام‌های کاملاً مؤدب و روشن", "🧠 بهینه‌ساز خودکار فرگمنت per-اپراتور (همراه‌اول/ایرانسل/رایتل) + سوییچ خاموش/روشن در بخش فرگمنت", "🔗 ساب چندنقطه‌ای پایدار، اتصال 0-RTT (ed=2048)، اثرانگشت تصادفی TLS و تب پروکسی عمومی سر جایشان", "📲 این نسخه از داخل خود پنل قابل بروزرسانی است (تنظیمات → بروزرسانی → بله)"]};
 
 function safeWaitUntil(ctx, promise) {
 	if (ctx && typeof ctx.waitUntil === "function") {
@@ -11,7 +11,9 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.3";
+const LML_PANEL_VERSION = "1.0.1.1";
+/* شناسهٔ ماشینی بروزرسانی: «1.0.1 بتا» = 1.0.1.1 — پنل‌های قدیمی‌تر آن را به‌عنوان نسخهٔ جدید می‌بینند */
+var CURRENT_VERSION = '1.0.1.1';
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -11287,7 +11289,7 @@ const HTML_TEMPLATES = {
 	</div>
 </div>
 
-<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.3 • همه‌چیز داخل پنل</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
+<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.1 بتا • همه‌چیز داخل پنل</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
 <h4 style="margin-top:2px">🚀 اسکنر غول — شکارچی لبهٔ کلودفلر (روی اینترنت خودتان)</h4>
 <div class="note"><svg><use href="#i-info"/></svg><div>بدون نیاز به هیچ ابزار اضافه — موتور <b>همین‌جا در مرورگر، روی نت خودتان</b> اجرا می‌شود: نامزدها از مخزن غول پنل + رنج‌های زندهٔ کلودفلر (رسمی، جدید و BGP جهانی) جمع می‌شوند، و بعد <b>دسته‌دسته تا رسیدن به عدد هدف شما</b> (مثلاً دقیقاً ۶۰ آی‌پی تمیز) به جست‌وجو ادامه می‌دهد؛ هر آی‌پی با <b>بازآزمون دقیق ۳ دوره</b> تأیید می‌شود. معیار تمیزی: کامل‌شدن handshake (خطا از جنس گواهی = لبه جواب داده)، نه timeouts و نه RST اپراتور. ✅ پرچم نتایج = <b>محل ثبت آی‌پی</b> (آی‌پی Anycast کلودفلر معمولاً آمریکا ثبت شده) — <b>خروجی واقعی اتصال</b>، نزدیک‌ترین دیتاسنتر کلودفلر به توست که در صفحهٔ کاربر و ریمارک کانفیگ نشان داده می‌شود.</div></div>
 <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0;font-size:12px">
@@ -11497,7 +11499,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.3';
+var CURRENT_VERSION = '1.0.1 بتا';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -16201,6 +16203,7 @@ async function checkForUpdates(isManual) {
 		var res = await api('/api/update-check');
 		var info = await res.json().catch(function () { return {}; });
 		if (!res.ok || !info || info.error) throw new Error((info && info.error) || 'check');
+		try { if (info.latest) info.latest = String(info.latest).replace(/^1\.0\.1\.\d+$/, '1.0.1 بتا'); } catch (eP) { }
 		State.latestVersion = info.latest || CURRENT_VERSION;
 		set('setLatest', info.latest || '—');
 		set('mLatest', info.latest || '—');
