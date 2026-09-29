@@ -1,5 +1,5 @@
 import { connect } from "cloudflare:sockets";
-const LML_SCANNER_RELEASE = {"version": "1.0.1 بتا", "build": "giant-frag-beta-20260928", "notes": ["🛡 موتور غول (قوی و بزرگ): فرگمنت 80-160 با جیتر 10-20 — حداکثر محافظت اتصال، با پیام‌های کاملاً مؤدب و روشن", "🧠 بهینه‌ساز خودکار فرگمنت per-اپراتور (همراه‌اول/ایرانسل/رایتل) + سوییچ خاموش/روشن در بخش فرگمنت", "🔗 ساب چندنقطه‌ای پایدار، اتصال 0-RTT (ed=2048)، اثرانگشت تصادفی TLS و تب پروکسی عمومی سر جایشان", "📲 این نسخه از داخل خود پنل قابل بروزرسانی است (تنظیمات → بروزرسانی → بله)"]};
+const LML_SCANNER_RELEASE = {"version": "1.0.2", "build": "socks-giant-20260929e", "notes": ["🧦 جست‌وجوی ساکس عمومی: از گروه‌های تلگرامی، کانفیگ‌های عمومی و لیست‌های زندهٔ جهانی جمع می‌شود و پنل تا پیدا شدن ساکس باکیفیت، دوربه‌دور (تا ۳ دور) به جست‌وجو ادامه می‌دهد", "📶 فرگمنت قوی‌تر: موتور غول حالا پکت‌های ریزتر با پخش زمانی گسترده می‌سازد و ماسک چندلایه با نویز هم اضافه شد", "📱 هیدیفای و برنامه‌های مشابه: فرگمنت به‌صورت خودکار روی اشتراک فعال می‌شود و برای کاربران زنجیره‌دار، ساکس با فرمت Sing-box به‌درستی اعمال می‌گردد", "🧹 پاک‌سازی کامل نام‌ها و برچسب‌ها از کامنت‌ها و متن‌های پنل"]};
 
 function safeWaitUntil(ctx, promise) {
 	if (ctx && typeof ctx.waitUntil === "function") {
@@ -11,9 +11,9 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.1.1";
-/* شناسهٔ ماشینی بروزرسانی: «1.0.1 بتا» = 1.0.1.1 — پنل‌های قدیمی‌تر آن را به‌عنوان نسخهٔ جدید می‌بینند */
-var CURRENT_VERSION = '1.0.1.1';
+const LML_PANEL_VERSION = "1.0.2";
+/* شناسهٔ ماشینی بروزرسانی: 1.0.2 از 1.0.1.x جدیدتر است — پنل‌های قدیمی‌تر آن را به‌عنوان نسخهٔ جدید می‌بینند */
+var CURRENT_VERSION = '1.0.2';
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -59,8 +59,10 @@ const LML_CF_RANGES = [
 /* رنج‌های تأییدشدهٔ جدید کلودفلر که هنوز در فهرست رسمی api.cloudflare.com/client/v4/ips نیستند.
    45.130.125.0/24 ⇒ BGP: AS13335 CLOUDFLARENET + پاسخ «Server: cloudflare» + گواهی cloudflare.com
    (بررسی زنده ۲۰۲۶-۰۹-۲۵). همسایه‌هایش (45.130.124/126/127) کلودفلر نیستند — فقط همین /24.
-   نکته: پذیرش کانفیگ هیچ‌وقت به این فهرست وابسته نیست (IP-FREE)؛ این فهرست فقط باعث می‌شود
-   تست آی‌پی برای لبه‌های واقعی کلودفلر ✅ قطعی بدهد و پروب بی‌فایده از داخل ورکر انجام نشود. */
+   نکته: پذیرش کانفیگ هیچ‌وقت به این فهرست وابسته نیست (IP-FREE). این فهرست فقط «هویت کلودفلری»
+   آی‌پی را تأیید می‌کند و هیچ‌وقت به‌معنی باز بودنش از اینترنت ایران نیست — ملاک کارکرد، پروب
+   مرورگری از اینترنت خودِ مدیر است (تست از نت خودم). به همین دلیل این رنج از استخر پیشنهاد
+   (POPULAR_EDGE / POP) بیرون گذاشته شده تا آی‌پی بی‌مسیر به کسی پیشنهاد نشود. */
 const LML_CF_EXTRA_RANGES = [
 	"45.130.125.0/24"
 ];
@@ -197,38 +199,7 @@ function lmlIpInCfWide(ip, bgpList) {
 	for (let i = 0; i < bgpList.length; i++) if (lmlCidrHas(bgpList[i], n)) return "bgp";
 	return "";
 }
-/* ============================================================
-   ⚡ STRONG MODE v1.0.2 — «کانفیگ قوی» یک گزینه، همهٔ لایه‌ها باهم
-   ترکیب بقا: آی‌پی تمیز + دامنه + دامنه‌های زاپاس + چند پورت +
-   فرگمنت سنگین tlshello + اثرانگشت تصادفی + حذف خودکار آی‌پی
-   مردهٔ crowd. پیش‌فرض: روشن. IPv4-اول (v6 در ایران بسته است).
-   ============================================================ */
-let LML_FRAGOPT_MEM = { at: 0, on: null };
-async function lmlFragOptOn(env) {
-	const now = Date.now();
-	if (LML_FRAGOPT_MEM.on !== null && (now - LML_FRAGOPT_MEM.at) < 60000) return LML_FRAGOPT_MEM.on;
-	let on = true;
-	try {
-		const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_frag_opt'").first();
-		if (row && row.value !== null && row.value !== undefined) on = row.value === '1';
-	} catch (e) { }
-	LML_FRAGOPT_MEM = { at: now, on: on };
-	return on;
-}
-/* 🧠 پریست‌های فرگمنت per-اپراتور (دانش جامعهٔ کاربری ایران) */
-const LML_OP_FRAG = {
-	mci: { len: "100-200", int: "5-10" },
-	irancell: { len: "80-160", int: "10-20" },
-	rightel: { len: "120-250", int: "4-8" },
-	other: { len: "100-200", int: "5-10" }
-};
-function lmlOpFrag(asOrg) {
-	const o = String(asOrg || "").toLowerCase();
-	if (o.indexOf("irancell") >= 0 || o.indexOf("mtn") >= 0) return LML_OP_FRAG.irancell;
-	if (o.indexOf("rightel") >= 0) return LML_OP_FRAG.rightel;
-	if (o.indexOf("telecommunication") >= 0 || o.indexOf("mci") >= 0 || o.indexOf("tci") >= 0) return LML_OP_FRAG.mci;
-	return LML_OP_FRAG.other;
-}
+/* v1.0.2: بهینه‌ساز خودکار فرگمنت per-اپراتور حذف شد — فرگمنت فقط دستی یا با موتور غول؛ هیچ‌چیز خودکار تزریق نمی‌شود */
 async function lmlGetSpareDomains(env) {
 	try {
 		const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'lml_spare_domains'").first();
@@ -419,7 +390,7 @@ async function lmlLoadIpTestMem(env) {
 					const e = j[k];
 					if (!e) continue;
 					/* v1.0.0-FINAL: مکانیزم «آی‌پی بد» برای همیشه غیرفعال است — هیچ آی‌پی از هیچ‌جا
-					   از کانفیگ‌ها حذف نمی‌شود (مثل نوا/زئوس هر آی‌پی پذیرفته است).
+					   از کانفیگ‌ها حذف نمی‌شود (هر آی‌پی پذیرفته است).
 					   کش آلودهٔ قدیمی هم بی‌اثر می‌شود؛ فقط پرچم کشور (cc) استخراج می‌گردد. */
 					if (Number(e.ok) === 1 && e.cc) cc[k] = String(e.cc);
 				}
@@ -723,8 +694,11 @@ const LML_GLOBAL_IP_SOURCES = [
 	"https://raw.githubusercontent.com/arista-project/cf-clean-ips/main/ip.txt"
 ];
 const LML_SOCKS_SOURCES = [
+	"https://api.openproxylist.xyz/socks5.txt",
+	"https://www.socks-proxy.net/",
 	"https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
-	"https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks5.txt"
+	"https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks5.txt",
+	"https://raw.githubusercontent.com/prxchk/proxy-list/main/socks5.txt"
 ];
 let LML_GLOBAL_IPS_MEM = { at: 0, ips: null };
 let LML_SOCKS_MEM = { at: 0, srcAt: 0, list: null, alive: null };
@@ -752,7 +726,9 @@ async function lmlGetGlobalRepoIps() {
 		   و ۳۰٪ از کل رنج‌های رسمی+جدید — مخزن جهانی هرگز خالی نمی‌ماند */
 		try {
 			const ranges = (LML_CF_RANGE_CACHE.list && LML_CF_RANGE_CACHE.list.length) ? LML_CF_RANGE_CACHE.list : LML_CF_RANGES;
-			const POPULAR_EDGE = ["104.16.0.0/13", "104.24.0.0/14", "172.64.0.0/13", "162.158.0.0/15", "188.114.96.0/20", "190.93.240.0/20", "173.245.48.0/20", "45.130.125.0/24"];
+			/* 45.130.125.0/24 عمداً در استخر پیشنهاد نیست: لبهٔ واقعی کلودفلر است (BGP AS13335) ولی
+			   ثبت آن نزد RapidSeedbox است و از اینترنت ایران در عمل مسیر ندارد؛ اگر کاربر خودش وارد کند پذیرفته می‌شود. */
+			const POPULAR_EDGE = ["104.16.0.0/13", "104.24.0.0/14", "172.64.0.0/13", "162.158.0.0/15", "188.114.96.0/20", "190.93.240.0/20", "173.245.48.0/20"];
 			let guard = 0;
 			while (out.length < 400 && guard < 3000) {
 				guard++;
@@ -1247,6 +1223,10 @@ async function ensureTlsOnlyPorts(env, ctx) {
 	/* One-time normalization: stored user ports become TLS-only (like the default panel behavior).
 	   Non-TLS ports (80/8080/...) cannot be encrypted by Cloudflare, so they are removed from the
 	   database itself. If a user ends up with no TLS port, they get 443. Never breaks requests. */
+	/* پنل هرگز پورت‌های کاربر را بازنویسی نمی‌کند — هر پورتی که وارد شده باشد
+	   (TLS یا غیرTLS) سر جایش می‌ماند و برای پورت غیرTLS لینک security=none ساخته می‌شود
+	   مهاجرت «فقط‌TLS‌سازی» برای همیشه غیرفعال شد. */
+	if (true) return;
 	if (localPortsTlsMigrated) return;
 	try {
 		const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'ports_tls_only_migrated'").first();
@@ -1869,7 +1849,7 @@ const Router = {
 			if (url.pathname.startsWith("/status/")) {
 				return await Router.handleUserStatus(request, url, env, ctx);
 			}
-			/* v1.0.0-FINAL (سبک نوا/زئوس): مسیرهای /sub/ و /feed/ برای «همه» کلاینت‌ها همیشه
+			/* v1.0.0-FINAL: مسیرهای /sub/ و /feed/ برای «همه» کلاینت‌ها همیشه
 			   کانفیگ خام برمی‌گردانند — Hiddify، v2rayNG، Karing، Streisand، Shadowrocket، v2Box، husi...
 			   دیگر هیچ‌وقت به‌جای کانفیگ، صفحهٔ HTML دریافت نمی‌کنند. پرتال فقط روی /s/ یا format=html */
 			const isBrowserPortal = url.pathname.startsWith("/s/") || format === "html" || format === "portal";
@@ -1896,6 +1876,13 @@ const Router = {
 				return await SubscriptionService.generateV2rayJson(user, host);
 			}
 			if (url.pathname.startsWith("/singbox/") || format === "singbox" || ua.includes("sing-box")) {
+				return await SubscriptionService.generateSingbox(user, host);
+			}
+			/* HID-CHAIN: لینک متنی نمی‌تواند زنجیرهٔ ساکس را حمل کند — برای کاربر زنجیره‌دار،
+			   هیدیفای و برنامه‌های مبتنی بر sing-box به‌جای متن، ساب JSON می‌گیرند تا
+			   پروکسی خروجی (ساکس عمومی) واقعاً روی اتصال اعمال شود */
+			const hasChainHid = !!(user.user_socks5 || user.user_proxy_ip);
+			if (hasChainHid && /hiddify|sing-box|singbox|husi/i.test(ua)) {
 				return await SubscriptionService.generateSingbox(user, host);
 			}
 			return await SubscriptionService.generateText(user, host, ctx, env, String((request.cf && request.cf.colo) || ""), lmlCrowdRegion(request), String((request.cf && request.cf.asOrganization) || ""));
@@ -2648,23 +2635,6 @@ const Router = {
 			});
 			return { ranges: ranges, status: status };
 		}
-		if (url.pathname === "/api/frag-opt" && (request.method === "GET" || request.method === "POST")) {
-			try {
-				const session = await DbService.getSession(request, env);
-				if (!session || !session.is_admin) return new Response(JSON.stringify({ error: "دسترسی مجاز نیست" }), { status: 403, headers: { "Content-Type": "application/json; charset=utf-8" } });
-				if (request.method === "GET") {
-					const on = await lmlFragOptOn(env);
-					return new Response(JSON.stringify({ success: true, on: on }), { headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
-				}
-				const body = await readJsonBody(request);
-				const v = body.on ? '1' : '0';
-				await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lml_frag_opt', ?)").bind(v).run();
-				LML_FRAGOPT_MEM = { at: 0, on: null };
-				return new Response(JSON.stringify({ success: true, on: !!body.on }), { headers: { "Content-Type": "application/json; charset=utf-8" } });
-			} catch (e) {
-				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
-			}
-		}
 		if (url.pathname === "/api/cf-ranges" && request.method === "GET") {
 			/* GIANT: تمام رنج‌های کلودفلر — رسمی + جدید تأییدشده + لایهٔ زندهٔ BGP جهانی */
 			try {
@@ -2721,14 +2691,16 @@ const Router = {
 						let p;
 						const wideT = lmlIpInCfWide(ip, bgpListT);
 						if (wideT) {
-							p = { ok: true, ms: 0, reason: wideT === "official" ? "آی‌پی لبهٔ کلودفلر ✓ — کانفیگ TLS با آن ساخته می‌شود" : "فضای کلودفلر (BGP جهانی AS13335) ✓ — آی‌پی قبول است و در کانفیگ‌ها می‌ماند" };
+							p = { ok: true, ms: 0, reason: (wideT === "official" ? "لبهٔ رسمی کلودفلر" : "فضای کلودفلر (BGP جهانی AS13335)") + " — از سمت شبکهٔ کلودفلر زنده است؛ باز بودنش از اینترنت خودت با «تست از نت من» سنجیده می‌شود" };
 						} else {
 							p = await lmlProbeIpTls(ip, portT, sniHost, 4500);
+							if (p.ok) p.reason = "از دیتاسنتر کلودفلر پاسخ داد (handshake TLS موفق) — یعنی آی‌پی زنده است، نه اینکه از اینترنت ایران باز است";
 						}
-						/* هر آی‌پی از هرجا پذیرفته است — نتیجهٔ پروب فقط اطلاع‌رسانی است
-						   و همیشه «موفق» گزارش می‌شود تا هیچ آی‌پی قرمز/حذف نشود */
-						const reasonF = p.ok ? p.reason : "از سمت ورکر پاسخ گرفته نشد (محدودیت خروجی کلودفلر) — آی‌پی قبول است و در کانفیگ‌ها می‌ماند";
-						return { ip: ip, ok: 1, ms: p.ms, reason: reasonF, cc: "" };
+						/* HONEST-TEST: این سمتِ «سرور» است، پس هیچ‌وقت ادعای ✅ کاربردی نمی‌کند؛
+						   ملاک واقعی، پروب مرورگری از اینترنت خودِ مدیر است (side:"client").
+						   ok همیشه ۱ می‌ماند تا هیچ آی‌پی قرمز/حذف نشود. */
+						const reasonF = p.ok ? p.reason : "از سمت ورکر پاسخ گرفته نشد — آی‌پی قبول است و در کانفیگ‌ها می‌ماند";
+						return { ip: ip, ok: 1, srv: p.ok ? 1 : 0, side: "server", ms: p.ms, reason: reasonF, cc: "" };
 					}));
 					rs.forEach(function (r) { results.push(r); });
 				}
@@ -2941,14 +2913,22 @@ const Router = {
 				return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
 			}
 		}
+		/* گروه‌های تلگرامی، کانال‌های کانفیگ و لیست‌های زندهٔ جهانی —
+		   اول منابع باکیفیت (گروه/کانفیگ)، آخر لیست‌های انبوه؛ هر منبع مرده فقط نادیده گرفته می‌شود */
 		const PUBLIC_PROXY_SOURCES = [
+			"https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list_raw.txt",
+			"https://t.me/s/socksiran",
+			"https://t.me/s/tgsocks",
+			"https://api.openproxylist.xyz/socks5.txt",
+			"https://www.socks-proxy.net/",
 			"https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt",
 			"https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
-			"https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
 			"https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt",
 			"https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt",
-			"https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5.txt",
-			"https://hoplimit.shop/proxy/ALL.txt"
+			"https://raw.githubusercontent.com/prxchk/proxy-list/main/socks5.txt",
+			"https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks5.txt",
+			"https://hoplimit.shop/proxy/ALL.txt",
+			"https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt"
 		];
 		/* proxyscrape is asked last and filters by country server-side */
 		const PROXY_COUNTRY_API = "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=";
@@ -2987,10 +2967,26 @@ const Router = {
 					if (!t) { detail[host] = 0; continue; }
 					const parts = String(t).split("\n");
 					let got = 0;
+					/* شکار لینک ساکس از دل HTML گروه‌های تلگرامی (tg://socks و t.me/socks) */
+					const tgLinks = String(t).match(/(?:tg:\/\/socks|t\.me\/socks)\?[^"'<\s]+/g) || [];
+					for (const tl of tgLinks) {
+						if (lines.length >= WORKER_LINE_CAP) break;
+						const q = tl.replace(/&amp;/g, "&");
+						const srvM = /[?&]server=([^&]+)/.exec(q);
+						const prtM = /[?&]port=([^&]+)/.exec(q);
+						if (!srvM || !prtM) continue;
+						const usrM = /[?&]user=([^&]+)/.exec(q);
+						const pwdM = /[?&]pass=([^&]+)/.exec(q);
+						const fullTg = "socks5://" + (usrM && pwdM ? (usrM[1] + ":" + pwdM[1] + "@") : "") + srvM[1] + ":" + prtM[1];
+						if (seen.has(fullTg)) continue;
+						seen.add(fullTg);
+						lines.push(fullTg); got++;
+					}
 					for (let k = 0; k < parts.length && lines.length < WORKER_LINE_CAP; k++) {
 						let l = parts[k].trim();
-						if (l.length <= 5 || l.length >= 120) continue;
-						if (/^(socks4|socks5|socks|http|https|tg):\/\//i.test(l) || l.indexOf("t.me/socks") >= 0) {
+						if (l.length <= 5 || l.length >= 200) continue;
+						if (/^socks:\/\//i.test(l)) l = "socks5://" + l.substring(8);
+						if (/^(socks4|socks5|http|https|tg):\/\//i.test(l) || l.indexOf("t.me/socks") >= 0) {
 							/* already a full url */
 						} else if (/^\d{1,3}(\.\d{1,3}){3}:\d{2,5}$/.test(l)) {
 							l = "socks5://" + l;
@@ -4855,8 +4851,10 @@ rules:
 				if (!detourTag) detourTag = tag;
 			});
 		} catch (e) { }
-		const fragLen = String(user.frag_len || "200-3000").trim() || "200-3000";
-		const fragPackets = String(user.frag_int || "1-2").trim() || "1-2";
+		/* HID-FRAG: قبلاً جای فیلدها عوض بود (interval جای packets نوشته می‌شد!) —
+		   حالا استاندارد sing-box: packets=tlshello · length=طول · interval=بازه؛ بدون اجبار وقتی فرگمنت انتخاب نشده */
+		const fragLen = String(user.frag_len || "").trim();
+		const fragInt = String(user.frag_int || "").trim();
 		const vlessOut = {
 			"type": "vless",
 			"tag": "⚡ LML-OUTBOUND",
@@ -4867,13 +4865,13 @@ rules:
 				"enabled": true,
 				"server_name": host,
 				"insecure": false,
-				"utls": { "enabled": true, "fingerprint": String(user.fingerprint || "chrome") },
-				"fragment": { "packets": fragPackets, "length": fragLen, "mode": "random" }
+				"utls": { "enabled": true, "fingerprint": String(user.fingerprint || "chrome") }
 			},
 			"transport": { "type": "ws", "path": path, "headers": { "Host": host }, "max_early_data": 2048, "early_data_header_name": "Sec-WebSocket-Protocol" },
 			"tcp_fast_open": true
 		};
 		if (detourTag) vlessOut.detour = detourTag;
+		if (fragLen && fragInt) vlessOut.tls.fragment = { "packets": "tlshello", "length": fragLen, "interval": fragInt };
 		const routeRules = [];
 		if (user.block_ads) routeRules.push({ "geosite": ["category-ads-all"], "outbound": "block" });
 		if (user.block_porn) routeRules.push({ "geosite": ["category-porn"], "outbound": "block" });
@@ -4945,9 +4943,12 @@ rules:
 		/* ---- IP-FREE: آی‌پی‌های کاربر مستقیم در لینک TLS (با SNI=دامنه)؛ بدون بررسی رنج ---- */
 		let lmlHost = host;
 		try { lmlHost = (await lmlPanelHostResolve(env, host)) || host; } catch (e) { lmlHost = host; }
+		const hasUserIpsGt = parsedUserIps.length > 0;
 		let lmlCleanIps = [];
 		{
-			const wantCount = Math.max(1, Math.min(parseInt(user.ip_count, 10) || 20, 40));
+			/* v1.0.2: آی‌پی‌های خود کاربر بدون هیچ سقف تعدادی — همه داخل کانفیگ می‌مانند؛
+			   سقف فقط برای استخر خودکار (کاربر بدون آی‌پی) */
+			const wantCount = hasUserIpsGt ? 400 : Math.max(1, Math.min(parseInt(user.ip_count, 10) || 20, 40));
 			const rawIps = ips.filter(function (x) { return String(x).trim() && String(x).trim().toLowerCase() !== String(lmlHost).toLowerCase(); });
 			if (rawIps.length) {
 				lmlCleanIps = lmlOnlyCfIps(rawIps, wantCount);
@@ -4962,7 +4963,7 @@ rules:
 				lmlTlsIps = lmlCleanIps.filter(function (ip) { return !badIpsGt[ip] || lmlIpInCf(ip) || parsedUserIps.indexOf(ip) >= 0; });
 				ipCcGt = await lmlGetIpCc(env);
 			} catch (e) { lmlTlsIps = lmlCleanIps.slice(); }
-			if (lmlTlsIps.length > 1 && regionKey) {
+			if (!hasUserIpsGt && lmlTlsIps.length > 1 && regionKey) { /* ترتیب ورودی کاربر هرگز عوض نمی‌شود */
 				try { lmlTlsIps = lmlCrowdSortForRegion(lmlTlsIps, regionKey, await lmlCrowdLoad(env)); } catch (e) { }
 			}
 		}
@@ -4971,22 +4972,12 @@ rules:
 			.split(",")
 			.map((p) => p.trim())
 			.filter((p) => p.length > 0);
-		// TLS-ONLY: Cloudflare accepts TLS handshakes on 443/2053/2083/2087/2096/8443 only.
-		// Any other port would produce security=none (plaintext) → keep TLS ports only.
-		const tlsOnlyPorts = ports.filter((p) => TLS_PORTS.has(p));
-		ports = tlsOnlyPorts.length > 0 ? tlsOnlyPorts : ["443"];
-		/* v1.0.1 LEAN: سابِ کم‌مصرف — حداکثر ۴ آی‌پی برتر (مرتب‌شده با crowd) و حداکثر ۲ پورت
-		   به‌جای صدها لینک تکراری ⇒ کلاینت ترافیک کمتری برای تست کانفیگ‌های مرده هدر می‌دهد
-		   و فایل ساب کوچک‌تر می‌شود. لینک دامنه همیشه هست. */
-		try { lmlTlsIps = lmlTlsIps.slice(0, 4); } catch (e) { }
-		ports = ports.slice(0, 2);
-		/* 🧠 بهینه‌ساز فرگمنت: کاربرِ بدون فرگمنت دستی ⇒ پریست اپراتورش خودکار روی لینک‌ها */
-		try {
-			if (env && (!user.frag_len || !user.frag_int) && (await lmlFragOptOn(env))) {
-				const ofx = lmlOpFrag(asOrgHint);
-				user = Object.assign({}, user, { frag_len: ofx.len, frag_int: ofx.int });
-			}
-		} catch (e) { }
+		/* v1.0.2: همهٔ پورت‌های واردشدهٔ کاربر بدون فیلتر و بدون برش —
+		   پورت TLS ⇒ security=tls و پورت غیرTLS ⇒ security=none. */
+		if (!ports.length) ports = ["443"];
+		/* LEAN: برش آی‌پی فقط برای استخر خودکار (کاربرانی که آی‌پی خودشان را وارد نکرده‌اند) */
+		if (!hasUserIpsGt) { try { lmlTlsIps = lmlTlsIps.slice(0, 4); } catch (e) { } }
+		/* v1.0.2: فرگمنت خودکار حذف شد — فرگمنت فقط با انتخاب کاربر (موتور غول یا مقادیر دستی) روی لینک می‌نشیند */
 		let spareDomains = [];
 		try { if (env) spareDomains = await lmlGetSpareDomains(env); } catch (e) { }
 		const fpPool = ["chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq"];
@@ -5125,16 +5116,16 @@ rules:
 		const enableVless = connType.includes("vless") || connType === "vl" + "e" + "ss" || (!connType.includes("trojan") && !connType.includes("shadowsocks"));
 		const enableTrojan = connType.includes("trojan");
 		const enableSS = connType.includes("shadowsocks");
-		/* خانواده ۱: آی‌پی تمیز کاربر + TLS (SNI=دامنه، allowInsecure=1) — فقط پورت‌های TLS که کاربر انتخاب کرده */
+		/* خانواده ۱: آی‌پی تمیز کاربر — پورت TLS با SNI=دامنه؛ پورت غیرTLS با security=none */
 		/* خانواده ۲: دامنه + TLS — گواهی همیشه معتبر */
-		/* لینک پورت HTTP/بدونTLS ساخته نمی‌شود — فقط پورت‌های فعال کاربر */
+		/* v1.0.2: همهٔ آی‌پی‌های کاربر × همهٔ پورت‌های کاربر، بدون برش */
 		const lmlEntries = [];
 		lmlTlsIps.forEach((ipClean) => {
-			ports.forEach((portStr) => { lmlEntries.push({ addr: ipClean, port: portStr, tls: true, ip: ipClean }); });
+			ports.forEach((portStr) => { lmlEntries.push({ addr: ipClean, port: portStr, tls: TLS_PORTS.has(portStr), ip: ipClean }); });
 		});
-		ports.forEach((portStr) => { lmlEntries.push({ addr: lmlHost, port: portStr, tls: true, ip: "" }); });
+		ports.forEach((portStr) => { lmlEntries.push({ addr: lmlHost, port: portStr, tls: TLS_PORTS.has(portStr), ip: "" }); });
 		if (spareDomains.length) {
-			spareDomains.forEach((sd) => { ports.forEach((portStr) => { lmlEntries.push({ addr: sd, port: portStr, tls: true, ip: "", sni: sd }); }); });
+			spareDomains.forEach((sd) => { ports.forEach((portStr) => { lmlEntries.push({ addr: sd, port: portStr, tls: TLS_PORTS.has(portStr), ip: "", sni: sd }); }); });
 		}
 		lmlEntries.forEach((entry) => {
 			resolvedProxies.forEach((proxy) => {
@@ -5148,7 +5139,11 @@ rules:
 					/* v1.0.1 EXIT-FLAG: پرچم «خروجی واقعی» — زنجیره‌ای = کشور پروکسی خروجی،
 					   مستقیم = کشور دیتاسنتر (colocloudflare) که ترافیک واقعاً از آنجا خارج می‌شود.
 					   کشور ثبتی خود آی‌پی (که برای Anycast کلودفلر تقریباً همیشه آمریکاست و گمراه‌کننده بود) حذف شد. */
-					const exitFlagGt = isChainedGt ? chainFlagGt : lmlIpFlag;
+					/* پرچم کشور داخل نام لینک نمی‌آید — در بسیاری از کلاینت‌ها پرچم به‌صورت
+					   دو حرف لاتین (NL/DE/RO) نمایش داده می‌شود و کاربر فکر می‌کند خروجی‌اش آن کشور است،
+					   درحالی‌که آن فقط دیتاسنتر ورودی کلودفلر بود. مستقیم = 🌐 ، زنجیره‌ای = کشور پروکسی
+					   خروجی. */
+					const exitFlagGt = (isChainedGt && chainFlagGt) ? chainFlagGt : "🌐 ";
 					const ipPartGt = entry.ip ? (entry.ip + " ") : "";
 					const remarkBase = "LML | " + exitFlagGt + ipPartGt + user.username;
 					const tlsVal = isTlsPort ? "tls" : "none";
@@ -5159,17 +5154,17 @@ rules:
 					if (user.tls_mask) userFrag += "&mask=" + encodeURIComponent(user.tls_mask);
 						
 					const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
-					const fpUse = fpPool[Math.floor(Math.random() * fpPool.length)]; /* اثرانگشت تصادفی (ضدفسیلترینگ) */
+					const fpUse = fp; /* v1.0.2: اثرانگشت ثابت برای همهٔ لینک‌ها (انتخاب کاربر یا chrome) */
 					const sniUse = entry.sni || lmlHost;
 					const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fpUse + "&allowInsecure=" + insecureFlag + "&sni=" + sniUse) : "";
 
 					if (enableVless) {
 						const remark = remarkBase;
-						links.push("vl" + "e" + "ss://" + user.uuid + "@" + ipU + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&encryption=none&host=" + (entry.sni || host) + "&type=ws" + tlsParams + userFrag + "&ed=2048#" + encodeURIComponent(remark));
+						links.push("vl" + "e" + "ss://" + user.uuid + "@" + ipU + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&encryption=none&host=" + (entry.sni || host) + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(remark));
 					}
 					if (enableTrojan) {
 						const trojanRemark = remarkBase;
-						links.push("trojan://" + user.uuid + "@" + ipU + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&host=" + (entry.sni || lmlHost) + "&type=ws" + tlsParams + userFrag + "&ed=2048#" + encodeURIComponent(trojanRemark));
+						links.push("trojan://" + user.uuid + "@" + ipU + ":" + portStr + "?path=" + proxy.currentDynPath + "&security=" + tlsVal + "&host=" + (entry.sni || lmlHost) + "&type=ws" + tlsParams + userFrag + "#" + encodeURIComponent(trojanRemark));
 					}
 					if (enableSS) {
 						const ssRemark = remarkBase;
@@ -5197,16 +5192,18 @@ rules:
 			}
 		}
 		const subUserInfo = `upload=0; download=${downloadBytes}; total=${totalBytes}; expire=${expireTimestamp}`;
-		return new Response(subContent, {
-			headers: {
-				"Content-Type": "text/plain; charset=utf-8",
-				"Access-Control-Allow-Origin": "*",
-				"Cache-Control": "no-store",
-				"Subscription-Userinfo": subUserInfo,
-				"profile-update-interval": "6",
-				"profile-title": "LML CONNECT",
-			},
-		});
+		const subHeaders = {
+			"Content-Type": "text/plain; charset=utf-8",
+			"Access-Control-Allow-Origin": "*",
+			"Cache-Control": "no-store",
+			"Subscription-Userinfo": subUserInfo,
+			"profile-update-interval": "6",
+			"profile-title": "LML CONNECT",
+		};
+		/* HID-FRAG: هیدیفای و برنامه‌های مشابه با این هدر، موتور فرگمنت خودشان را روی ساب روشن می‌کنند —
+		   پس انتخاب فرگمنت کاربر (موتور غول یا دستی) حالا در هیدیفای هم واقعاً اعمال می‌شود */
+		if (user.frag_len && user.frag_int) subHeaders["enable-fragment"] = "true";
+		return new Response(subContent, { headers: subHeaders });
 	}
 }
 // One accounting writer per username/isolate. No D1 calls per packet.
@@ -9580,7 +9577,7 @@ const HTML_TEMPLATES = {
 		<div class="sb-brand">
 				<div class="sb-logo sb-logo-lml"><svg viewBox="0 0 46 40" aria-hidden="true"><defs><linearGradient id="lmlGradBrand" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#7c8cff"/><stop offset="100%" stop-color="#22d3ee"/></linearGradient></defs><rect x="1" y="1" width="44" height="38" rx="12" fill="url(#lmlGradBrand)"/><g fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13v14h6"/><path d="M20 27V13l4.5 8.5L29 13v14"/><path d="M35 13v14h6"/></g></svg></div>
 			<div class="sb-brand-text">
-						<div class="sb-brand-title">LML PANEL <span class="beta-chip">BETA</span></div>
+						<div class="sb-brand-title">LML PANEL</div>
 				<div class="sb-brand-sub">مدیریت یکپارچه سرویس</div>
 			</div>
 		</div>
@@ -9634,7 +9631,7 @@ const HTML_TEMPLATES = {
 		<main class="content" id="content">
 			<div class="beta-banner" id="betaBanner">
 				<svg style="width:16px;height:16px;flex:0 0 auto;color:var(--warn);margin-top:2px"><use href="#i-alert"/></svg>
-				<div><b>این نسخه بتا (آزمایشی) است.</b> پنل LML در مرحله آزمایشی قرار دارد و ممکن است در بخش‌هایی باگ یا رفتار ناپایدار دیده شود. لبخند! قبل از هر به‌روزرسانی حتماً از دیتابیس خود بکاپ بگیرید.</div>
+				<div><b>🎉 به نسخهٔ پایدار 1.0.2 خوش آمدید!</b> اکنون هر آی‌پی و پورتی که وارد کنید، بدون برش و به همان ترتیب داخل ساب می‌نشیند و فرگمنت فقط با انتخاب خودتان فعال می‌شود. قبل از هر به‌روزرسانی از دیتابیس خود بکاپ بگیرید.</div>
 				<button type="button" class="icon-btn bb-x" id="btnBetaClose" title="بستن"><svg><use href="#i-x"/></svg></button>
 			</div>
 <!-- ==================== DASHBOARD ==================== -->
@@ -9642,7 +9639,7 @@ const HTML_TEMPLATES = {
 				<div class="lml-hero">
 					<div class="lml-hero-mark"><svg viewBox="0 0 46 40" aria-hidden="true"><defs><linearGradient id="lmlGradHero" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#7c8cff"/><stop offset="100%" stop-color="#22d3ee"/></linearGradient></defs><rect x="1" y="1" width="44" height="38" rx="12" fill="url(#lmlGradHero)"/><g fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13v14h6"/><path d="M20 27V13l4.5 8.5L29 13v14"/><path d="M35 13v14h6"/></g></svg></div>
 					<div class="lml-hero-txt">
-						<div class="lml-hero-name">LML PANEL <span class="lml-ver" id="lmlVer">v1.0.0</span></div>
+						<div class="lml-hero-name">LML PANEL <span class="lml-ver" id="lmlVer">v1.0.2</span></div>
 						<div class="lml-hero-sub">مدیریت یکپارچه سرویس‌های کانفیگ</div>
 					</div>
 					<div class="lml-hero-free">
@@ -10888,11 +10885,11 @@ const HTML_TEMPLATES = {
 								<textarea class="input" id="fIps" placeholder="104.16.0.1" rows="4"></textarea>
 								<div class="lml-ip-actions">
 									<button type="button" class="btn btn-sm" id="btnFilterIps"><svg><use href="#i-filter"/></svg>مرتب‌سازی آی‌پی‌ها</button>
-									<button type="button" class="btn btn-sm" id="btnTestIps"><svg><use href="#i-activity"/></svg>تست آی‌پی تمیز</button>
+									<button type="button" class="btn btn-sm" id="btnTestIps"><svg><use href="#i-activity"/></svg>تست از نت خودم</button>
 									<button type="button" class="btn btn-sm" id="btnOpenLmlRepo"><svg><use href="#i-globe"/></svg>مخزن آی‌پی تمیز</button>
 								</div>
 								<div class="lml-ip-status" id="sslTestStatus" style="display:none"></div>
-								<div class="note" style="margin-top:8px"><svg><use href="#i-info"/></svg><div>کانفیگ‌ها <b>فقط روی پورت‌های TLS که تیک زده‌اید</b> ساخته می‌شوند (443، 2053 و…) — هیچ لینک پورت 80/بدونTLS ساخته نمی‌شود. دو خانواده لینک: <b>آی‌پی تمیز + TLS</b> (SNI=دامنه، allowInsecure=1 ⇒ بدون خطای SSL/CCL) و <b>دامنه + TLS</b>. <b>هر آی‌پی (کلودفلری یا غیرکلودفلری) پذیرفته می‌شود و هیچ آی‌پی از کانفیگ‌ها حذف نمی‌گردد</b>؛ برای هر آی‌پی لینک TLS با SNI=دامنه و allowInsecure=1 ساخته می‌شود و لینک‌های دامنه هم همیشه در ساب هستند. نتیجهٔ <b>«تست آی‌پی تمیز»</b> فقط اطلاع‌رسانی است و هیچ آی‌پی را رد نمی‌کند. 💡 برای لوکیشن خارجی و اتصال پایدار: «مخزن ساکس پروکسی» در تب پروکسی خروجی.</div></div>
+								<div class="note" style="margin-top:8px"><svg><use href="#i-info"/></svg><div>کانفیگ‌ها <b>برای همهٔ پورت‌هایی که وارد کرده‌اید</b> ساخته می‌شوند: پورت TLS (443، 2053 و…) ⇒ لینک <b>آی‌پی + TLS</b> با SNI=دامنه و allowInsecure=1 (بدون خطای SSL/CCL)، و پورت غیرTLS (80، 2052 و…) ⇒ لینک security=none. لینک <b>دامنه + TLS</b> هم همیشه داخل ساب هست. <b>هر آی‌پی (کلودفلری یا غیرکلودفلری) پذیرفته می‌شود و هیچ آی‌پی از کانفیگ‌ها حذف نمی‌گردد</b>؛ برای هر آی‌پی لینک TLS با SNI=دامنه و allowInsecure=1 ساخته می‌شود و لینک‌های دامنه هم همیشه در ساب هستند. <b>«تست از نت خودم»</b> هر آی‌پی را از اینترنت خودِ تو پروب می‌کند و صادقانه می‌گوید <b>باز ✅</b> است یا <b>بسته 🚫</b>؛ در هر دو حالت <b>هیچ آی‌پی حذف نمی‌شود</b>. پینگ سمت سرور کلودفلر فقط «زنده بودن» آی‌پی را نشان می‌دهد و هرگز ملاک کارکرد برای کاربر نیست. 💡 برای لوکیشن خارجی و اتصال پایدار: «مخزن ساکس پروکسی» در تب پروکسی خروجی.</div></div>
 							</div>
 							<div class="switch-row">
 								<div class="sr-text">
@@ -10910,17 +10907,7 @@ const HTML_TEMPLATES = {
 								<label class="switch"><input type="checkbox" id="fFragToggle" onchange="toggleFragInputs(this.checked)"><i></i></label>
 							</div>
 							<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 2px">
-								<button type="button" class="btn btn-sm" data-eng="light">🪶 موتور سبک</button>
-								<button type="button" class="btn btn-sm" data-eng="medium">⚙️ موتور متوسط</button>
-								<button type="button" class="btn btn-sm btn-primary" data-eng="heavy">🚀 موتور سنگین (نت ایران)</button>
-								<button type="button" class="btn btn-sm" data-eng="giant">🛡 موتور غول (قوی و بزرگ)</button>
-							</div>
-							<div class="switch-row" style="margin-top:10px">
-								<div class="sr-text">
-									<div class="sr-t">🧠 بهینه‌ساز خودکار فرگمنت (per-اپراتور)</div>
-									<div class="sr-d">کاربری که فرگمنت دستی ندارد، هنگام دریافت ساب به‌صورت خودکار پریست اپراتورش (همراه‌اول/ایرانسل/رایتل/سایر) را می‌گیرد — بدون هیچ تنظیمی</div>
-								</div>
-								<label class="switch"><input type="checkbox" id="fFragOpt" onchange="saveFragOpt(this.checked)"><i></i></label>
+								<button type="button" class="btn btn-sm btn-primary" data-eng="giant">🛡 موتور غول (قوی و بزرگ)</button>
 							</div>
 							<div style="display:none" id="fragEngRowClose">
 							</div>
@@ -10970,7 +10957,7 @@ const HTML_TEMPLATES = {
 
 						<!-- ---------- STEP 3 : PROXY ---------- -->
 						<div class="vtab-pane hidden" id="vtab-proxy">
-							<div class="note" style="margin-bottom:10px"><svg><use href="#i-info"/></svg><div>پروکسی‌ها <b>فقط از منابع عمومیِ زنده</b> اسکن و با تست واقعی (handshake + CONNECT + پینگ) انتخاب می‌شوند — بدون هیچ مخزن VIP. پروکسی انتخابی به کانفیگ کاربر زنجیر می‌شود و کشور خروجی او را تعیین می‌کند؛ کانفیگ‌های زنجیره‌ای 🌐 به‌دلیل آی‌پی ثابت، برای سایت‌های حساس به لوکیشن مناسب‌ترند.</div></div>
+							<div class="note" style="margin-bottom:10px"><svg><use href="#i-info"/></svg><div>پروکسی‌ها <b>فقط از منابع عمومیِ زنده</b> اسکن و با تست واقعی (handshake + CONNECT + پینگ) انتخاب می‌شوند — بدون هیچ مخزن VIP. پروکسی انتخابی به کانفیگ کاربر زنجیر می‌شود و کشور خروجی او را تعیین می‌کند (برای کاربر زنجیره‌دار در هیدیفای، اشتراک به‌صورت خودکار با فرمت Sing-box ارسال می‌شود تا ساکس واقعی اعمال شود)؛ کانفیگ‌های زنجیره‌ای 🌐 به‌دلیل آی‌پی ثابت، برای سایت‌های حساس به لوکیشن مناسب‌ترند.</div></div>
 							<div class="note warn" style="margin-bottom:12px"><svg><use href="#i-alert"/></svg><div>هشدار: هنگام اتصال به کانفیگ‌های 🌐 (پروکسی‌دار)، از باز کردن پنل با همان اتصال خودداری کنید (باعث قطع و اختلال در عملکرد پنل می‌شود).</div></div>
 							<div class="grid g-3" style="margin-bottom:14px">
 								<div class="kv"><span class="k">پینگ شما به کلودفلر</span><span class="v" id="pingClient2">—</span></div>
@@ -11289,7 +11276,7 @@ const HTML_TEMPLATES = {
 	</div>
 </div>
 
-<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.1 بتا • همه‌چیز داخل پنل</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
+<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.2 • همه‌چیز داخل پنل</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
 <h4 style="margin-top:2px">🚀 اسکنر غول — شکارچی لبهٔ کلودفلر (روی اینترنت خودتان)</h4>
 <div class="note"><svg><use href="#i-info"/></svg><div>بدون نیاز به هیچ ابزار اضافه — موتور <b>همین‌جا در مرورگر، روی نت خودتان</b> اجرا می‌شود: نامزدها از مخزن غول پنل + رنج‌های زندهٔ کلودفلر (رسمی، جدید و BGP جهانی) جمع می‌شوند، و بعد <b>دسته‌دسته تا رسیدن به عدد هدف شما</b> (مثلاً دقیقاً ۶۰ آی‌پی تمیز) به جست‌وجو ادامه می‌دهد؛ هر آی‌پی با <b>بازآزمون دقیق ۳ دوره</b> تأیید می‌شود. معیار تمیزی: کامل‌شدن handshake (خطا از جنس گواهی = لبه جواب داده)، نه timeouts و نه RST اپراتور. ✅ پرچم نتایج = <b>محل ثبت آی‌پی</b> (آی‌پی Anycast کلودفلر معمولاً آمریکا ثبت شده) — <b>خروجی واقعی اتصال</b>، نزدیک‌ترین دیتاسنتر کلودفلر به توست که در صفحهٔ کاربر و ریمارک کانفیگ نشان داده می‌شود.</div></div>
 <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0;font-size:12px">
@@ -11374,9 +11361,10 @@ const HTML_TEMPLATES = {
 					<option value="20">۲۰ پروکسی (سریع)</option>
 					<option value="40" selected>۴۰ پروکسی (متعادل)</option>
 					<option value="80">۸۰ پروکسی (دقیق)</option>
+					<option value="150">۱۵۰ پروکسی (جست‌وجوی عمیق)</option>
 				</select>
 			</div>
-			<div class="note"><svg><use href="#i-info"/></svg><div>لیست پروکسی‌ها از منابع عمومی رایگان دریافت و سپس با ۳ تلاش پشت‌سرهم تست می‌شود؛ بهترین پروکسی از نظر تعداد پاسخ موفق و کمترین پینگ انتخاب می‌گردد.</div></div>
+			<div class="note"><svg><use href="#i-info"/></svg><div>در <b>گروه‌های تلگرامی، کانفیگ‌های عمومی و لیست‌های زندهٔ جهانی</b> جست‌وجو می‌کند و <b>تا پروکسی باکیفیت پیدا نشود، دوربه‌دور (تا ۳ دور) به جست‌وجو ادامه می‌دهد</b>. هر پروکسی با ۳ تلاش پشت‌سرهم تست می‌شود؛ بهترین از نظر پاسخ موفق و کمترین پینگ انتخاب می‌گردد.</div></div>
 			<div class="scan-log hidden" id="pscanLog"></div>
 		</div>
 		<div class="modal-foot">
@@ -11499,7 +11487,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.1 بتا';
+var CURRENT_VERSION = '1.0.2';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -12692,9 +12680,8 @@ function getvIeesLink(username) {
 	var cleanIps = Array.isArray(user.ips_valid) ? user.ips_valid.slice(0, 40) : [];
 	var ips = [host];
 	var ports = String(user.port || '443').split(',').map(function (p) { return p.trim(); }).filter(function (p) { return p.length > 0; });
-	/* TLS-ONLY: keep encrypted (TLS) ports only; never leave the list empty */
-	var tlsOnlyPorts = ports.filter(function (p) { return TLS_PORTS.indexOf(p) >= 0; });
-	ports = tlsOnlyPorts.length ? tlsOnlyPorts : ['443'];
+	/* v1.0.2: همهٔ پورت‌های کاربر (TLS و غیرTLS) — هرگز خالی نمی‌ماند */
+	if (!ports.length) ports = ['443'];
 	var fpPoolP = ['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', '360', 'qq'];
 	var fpRawP = String(user.fingerprint || 'chrome').toLowerCase();
 	var fp = (fpRawP === 'random' || fpRawP === 'randomized') ? fpPoolP[Math.floor(Math.random() * fpPoolP.length)] : (user.fingerprint || 'chrome');
@@ -12757,8 +12744,8 @@ function getvIeesLink(username) {
 	/* v1.0.0-FINAL: بدون فیلتر — همهٔ آی‌پی‌ها (کلودفلری یا غیرکلودفلری، v4 یا v6) در کانفیگ می‌مانند */
 	var tlsIpsP = cleanIps.slice();
 	var lmlEntries = [];
-	tlsIpsP.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
-	ips.forEach(function (h) { ports.forEach(function (p) { lmlEntries.push({ addr: h, port: p, tls: true, ip: '' }); }); });
+	tlsIpsP.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: TLS_PORTS.indexOf(p) >= 0, ip: cip }); }); });
+	ips.forEach(function (h) { ports.forEach(function (p) { lmlEntries.push({ addr: h, port: p, tls: TLS_PORTS.indexOf(p) >= 0, ip: '' }); }); });
 	lmlEntries.forEach(function (entry) {
 			resolvedProxies.forEach(function (proxy) {
 				var ip = entry.addr;
@@ -12776,8 +12763,10 @@ function getvIeesLink(username) {
 				var ipCcP = entry.ip ? ((State.ipCcMap || {})[entry.ip] || '') : '';
 				var isChainedP = String(proxy.currentDynPath).indexOf('loc-') >= 0;
 				var chainFlagP = (isChainedP && proxy.flagEmoji && proxy.flagEmoji !== '🌐') ? (proxy.flagEmoji + ' ') : '';
-				var ipPartP = entry.ip ? ((ipCcP && !isChainedP ? flagText(ipCcP) + ' ' : '') + entry.ip + ' ') : '';
-				var remark = 'LML | ' + chainFlagP + ipPartP + user.username;
+				var ipPartP = entry.ip ? (entry.ip + ' ') : '';
+				/* هیچ پرچم کشوری (دیتاسنتر یا کشور ثبتی آی‌پی) داخل نام لینک نمی‌آید */
+				var exitFlagP = (isChainedP && chainFlagP) ? chainFlagP : '🌐 ';
+				var remark = 'LML | ' + exitFlagP + ipPartP + user.username;
 				if (enableVless) {
 					links.push('vless://' + (user.uuid || '') + '@' + ipU + ':' + portStr + '?path=' + proxy.currentDynPath + '&security=' + tlsVal + '&encryption=none&host=' + host + '&type=ws' + tlsParams + userFrag + '#' + encodeURIComponent(remark));
 				}
@@ -13463,20 +13452,7 @@ async function testUserSocksProxy() {
 }
 window.testUserSocksProxy = testUserSocksProxy;
 on($('btnTestProxies'), 'click', testUserSocksProxy);
-/* 🧠 بهینه‌ساز فرگمنت: سوییچ سراسری */
-function saveFragOpt(onV) {
-	api('/api/frag-opt', { method: 'POST', body: { on: onV ? 1 : 0 } }).then(function () {
-		toast(onV ? '🧠 بهینه‌ساز فرگمنت روشن شد — از این به بعد هر کاربر بدون فرگمنت دستی، پریست اپراتورش را می‌گیرد.' : '🧠 بهینه‌ساز فرگمنت خاموش شد.', 'ok', 7000);
-	}).catch(function () { toast('❌ ذخیره نشد.', 'err'); });
-}
-window.saveFragOpt = saveFragOpt;
-(async function () {
-	try {
-		var dF = await (await api('/api/frag-opt')).json().catch(function () { return {}; });
-		var elF = $('fFragOpt');
-		if (elF) elF.checked = dF.on !== false;
-	} catch (e) { }
-})();
+/* v1.0.2: بهینه‌ساز خودکار فرگمنت حذف شد — فقط موتور غول و مقادیر دستی */
 
 async function testDirectPing() {
 	var cEl = $('pingClient'), sEl = $('pingServer'), stEl = $('pingState');
@@ -13960,7 +13936,7 @@ async function gsBuildCandidates(want) {
 		try {
 			var rd = await (await api('/api/cf-ranges')).json();
 			var ranges = (rd.official || []).concat(rd.extras || []);
-			var POP = ['104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '162.158.0.0/15', '188.114.96.0/20', '190.93.240.0/20', '173.245.48.0/20', '45.130.125.0/24'];
+			var POP = ['104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '162.158.0.0/15', '188.114.96.0/20', '190.93.240.0/20', '173.245.48.0/20'];
 			var guard = 0;
 			while (out.length < want * 2 && guard < 5000 && !GS.stop) {
 				guard++;
@@ -14451,13 +14427,16 @@ window.lmlAddGhRepoIps = lmlAddGhRepoIps;
 
 
 /* ---- موتورهای اتصال (پریست فرگمنت) ---- */
+/* GIANT-FM: ماسک چندلایهٔ موتور غول — خردکردن ClientHello در دو لایه + نویز روی UDP
+   (برای PattNG/PattN و v2rayNG جدید از طریق پارامتر fm؛ بقیهٔ کلاینت‌ها نادیده می‌گیرند) */
+var GIANT_FM = '{"tcp": [{"type": "fragment", "settings": {"packets": "tlshello", "lengths": ["10", "80", "1"], "delays": ["5", "20"], "maxSplit": "0"}},{"type": "fragment", "settings": {"packets": "1-1", "lengths": ["114", "1"], "delays": ["1"], "maxSplit": "11"}}],"udp": [{"type": "noise", "settings": {"noise": [{"rand": "10-20", "delay": "10-16"}]}}]}';
 document.addEventListener('click', function (e) {
 	var t = e.target.closest ? e.target.closest('[data-eng]') : null;
 	if (!t) return;
 	var m = t.getAttribute('data-eng');
 	var tg = $('fFragToggle');
 	if (m === 'light') {
-		vset('fFragLen', ''); vset('fFragInt', '');
+		vset('fFragLen', ''); vset('fFragInt', ''); vset('fAdvancedFrag', '');
 		if (tg && tg.checked) tg.click();
 		toast('🪶 موتور سبک: بدون فرگمنت (برای نت‌های پایدار).', 'ok');
 	} else if (m === 'medium') {
@@ -14465,9 +14444,14 @@ document.addEventListener('click', function (e) {
 		if (tg && !tg.checked) tg.click();
 		toast('⚙️ موتور متوسط فعال شد (پیش‌فرض).', 'ok');
 	} else if (m === 'giant') {
-		vset('fFragLen', '80-160'); vset('fFragInt', '10-20');
+		vset('fFragLen', '10-80'); vset('fFragInt', '5-20');
 		if (tg && !tg.checked) tg.click();
-		toast('🛡 موتور غول فعال شد — حداکثر محافظت از اتصال در شرایط پرفشار شبکه؛ پایدار و بهینه برای همهٔ اپراتورها.', 'ok', 10000);
+		try {
+			vchk('fAdvancedToggle', true);
+			toggleAdvancedSettingsInputs(true);
+			vset('fAdvancedFrag', GIANT_FM);
+		} catch (eG) { }
+		toast('🛡 موتور غول فعال شد — قوی‌تر از قبل: پکت‌های ریز با پخش زمانی گسترده + ماسک چندلایه و نویز؛ حداکثر محافظت از اتصال در شرایط پرفشار و فیلترینگ سنگین.', 'ok', 12000);
 	} else {
 		vset('fFragLen', '100-300'); vset('fFragInt', '8-12');
 		if (tg && !tg.checked) tg.click();
@@ -16203,7 +16187,6 @@ async function checkForUpdates(isManual) {
 		var res = await api('/api/update-check');
 		var info = await res.json().catch(function () { return {}; });
 		if (!res.ok || !info || info.error) throw new Error((info && info.error) || 'check');
-		try { if (info.latest) info.latest = String(info.latest).replace(/^1\.0\.1\.\d+$/, '1.0.1 بتا'); } catch (eP) { }
 		State.latestVersion = info.latest || CURRENT_VERSION;
 		set('setLatest', info.latest || '—');
 		set('mLatest', info.latest || '—');
@@ -16291,10 +16274,21 @@ window.lmlFilterIpsNow = lmlFilterIpsNow;
 on($('btnFilterIps'), 'click', function () { lmlFilterIpsNow(); });
 
 /* ============================================================
-   تست آی‌پی تمیز — handshake واقعی TLS از ورکر (مثل رادار نوا)
-   آی‌پی‌های مردود از فیلد حذف و در DB نشان‌گذاری می‌شوند تا
-   خودکار از کانفیگ‌ها کنار بمانند ⇒ بدون خطای SSL/CCL
+   HONEST IP TEST — «تست از نت خودم»
+   ملاک، پروب واقعی از اینترنت خودِ مدیر است (همان منطق اسکنر غول):
+     cert/open ⇒ لبه جواب داده ⇒ از نت تو باز است ✅
+     rst       ⇒ ریست سریع اپراتور ⇒ فیلتر 🚫
+     timeout   ⇒ هیچ پاسخی نیست ⇒ مسدود/مرده 🚫
+   نتیجهٔ سمت سرور (handshake از دیتاسنتر کلودفلر) فقط به‌عنوان
+   «زنده بودن آی‌پی» کنارش نمایش داده می‌شود و هرگز ✅ کاربردی نیست.
+   هیچ آی‌پی حذف نمی‌شود — فیلد دست‌نخورده می‌ماند.
    ============================================================ */
+function lmlNetVerdict(n) {
+	if (!n || !n.done) return 'wait';
+	if (n.cls === 'cert' || n.cls === 'open') return 'open';
+	if (n.cls === 'rst' || n.cls === 'rst-late') return 'rst';
+	return 'timeout';
+}
 async function lmlTestIpsNow(isAuto) {
 	var st = $('sslTestStatus');
 	var raw = ($('fIps') && $('fIps').value) || '';
@@ -16303,35 +16297,84 @@ async function lmlTestIpsNow(isAuto) {
 	});
 	var uniq = [];
 	ips.forEach(function (x) { if (uniq.indexOf(x) < 0) uniq.push(x); });
+	uniq = uniq.slice(0, 60);
 	if (!uniq.length) { if (!isAuto) toast('آی‌پی‌ای وارد نشده است.', 'warn'); return; }
 	var btn = $('btnTestIps');
-	if (btn) { btn.disabled = true; btn.textContent = 'در حال تست...'; }
-	if (st) { st.style.display = ''; st.textContent = '⏳ تست خودکار ' + uniq.length + ' آی‌پی (handshake واقعی TLS + پرچم کشور)...'; }
+	if (btn) { btn.disabled = true; btn.innerHTML = '<svg><use href="#i-activity"/></svg>تست از نت خودت...'; }
+	var rounds = isAuto ? 1 : 2;
+	var net = {}, srv = {}, acc = {};
+	uniq.forEach(function (ip) { net[ip] = { cls: '', ms: 0, done: false }; });
+	var NOTE = '📡 ملاک، تست از اینترنت خودت است · نتیجهٔ سمت سرور فقط اطلاع‌رسانی است · هیچ آی‌پی حذف نمی‌شود';
+	function paint() {
+		if (!st) return;
+		st.style.display = '';
+		st.innerHTML = '';
+		var nd = document.createElement('div');
+		nd.style.cssText = 'padding:3px 0 6px;direction:rtl;text-align:right;opacity:.85';
+		nd.textContent = NOTE;
+		st.appendChild(nd);
+		uniq.forEach(function (ip) {
+			var n = net[ip], s = srv[ip], v = lmlNetVerdict(n);
+			var head;
+			if (v === 'wait') head = '⏳ ' + ip + ' — در حال تست از نت تو...';
+			else if (v === 'open') head = '✅ ' + ip + ' — از اینترنت تو باز است' + (n.ms ? ' (' + n.ms + 'ms)' : '');
+			else if (v === 'rst') head = '🚫 ' + ip + ' — از اینترنت تو بسته است (ریست اپراتور)';
+			else head = '🚫 ' + ip + ' — از اینترنت تو پاسخ نمی‌دهد (timeout)';
+			var tail = ' · سمت سرور: ' + (s ? (s.srv ? 'زنده' : 'بدون پاسخ') : '...') + (s && s.cc ? ' · ' + flagText(s.cc) : '') + ' · در کانفیگ می‌ماند';
+			var div = document.createElement('div');
+			div.style.cssText = 'padding:2px 0;direction:rtl;text-align:right';
+			div.textContent = head + tail;
+			st.appendChild(div);
+		});
+	}
+	paint();
 	try {
-		var res = await api('/api/test-ips', { method: 'POST', body: { ips: uniq, port: 443 } });
-		var d = await res.json().catch(function () { return {}; });
-		if (!d || !Array.isArray(d.results)) throw new Error((d && d.error) || 'پاسخ نامعتبر از سرور');
-		var good = [], bad = [];
-		d.results.forEach(function (r) { if (r.ok) good.push(r.ip); else bad.push(r.ip); });
-		if ($('fIps')) $('fIps').value = uniq.join(String.fromCharCode(10));
-		if (st) {
-			st.style.display = '';
-			st.textContent = '';
-			d.results.forEach(function (r) {
-				var div = document.createElement('div');
-				div.style.cssText = 'padding:2px 0;direction:rtl;text-align:right';
-				div.textContent = (r.ok ? '✅ ' : '⚠️ ') + (r.cc ? flagText(r.cc) + ' ' : '') + r.ip + ' — ' + r.reason + (r.ok ? '' : ' — در کانفیگ نگه داشته شد (هیچ آی‌پی حذف نمی‌شود)') + (r.ms ? ' (' + r.ms + 'ms)' : '');
-				st.appendChild(div);
-			});
+		/* کالیبراسیون آستانهٔ RST روی اینترنت فعلی مدیر */
+		try { if (!GS.baseline) await gsCalibrate(); } catch (e) { }
+		if (!GS.baseline) { GS.baseline = 150; GS.rstMax = 65; }
+		var queue = [];
+		for (var rd = 0; rd < rounds; rd++) uniq.forEach(function (ip) { queue.push(ip); });
+		var qi = 0;
+		async function runner() {
+			while (qi < queue.length) {
+				var ip = queue[qi++];
+				var r = await gsProbeOnce(ip, 443, 3500);
+				acc[ip] = acc[ip] || [];
+				acc[ip].push(r);
+				var best = null;
+				acc[ip].forEach(function (x) {
+					if ((x.cls === 'cert' || x.cls === 'open') && (!best || x.ms < best.ms)) best = x;
+				});
+				var last = acc[ip][acc[ip].length - 1];
+				var cls = best ? best.cls : last.cls;
+				var ms = best ? best.ms : last.ms;
+				/* پاسخ «تمیز» که از پینگ پایهٔ خودِ پنل سریع‌تر است، ریست دیرهنگام اپراتور است */
+				if (best && GS.baseline && ms < Math.max(45, GS.baseline * 0.55)) { cls = 'rst-late'; }
+				net[ip] = { cls: cls, ms: ms, done: acc[ip].length >= rounds };
+				paint();
+			}
 		}
-		if (good.length) toast('✅ ' + good.length + ' آی‌پی ثبت شد — همه در کانفیگ‌ها استفاده می‌شوند.', 'ok');
-		if (bad.length) toast('ℹ️ ' + bad.length + ' آی‌پی از سمت ورکر پاسخ نداد ولی حذف نشد — هر آی‌پی وارد کنید در کانفیگ می‌ماند.', 'info', 9000);
+		var runners = [];
+		var conc = Math.max(4, Math.min(10, uniq.length));
+		for (var k = 0; k < conc; k++) runners.push(runner());
+		var srvP = api('/api/test-ips', { method: 'POST', body: { ips: uniq, port: 443 } })
+			.then(function (res) { return res.json(); })
+			.then(function (d) { ((d && d.results) || []).forEach(function (r) { srv[r.ip] = r; }); paint(); })
+			.catch(function () { });
+		await Promise.all(runners.concat([srvP]));
+		paint();
+		var openN = uniq.filter(function (ip) { return lmlNetVerdict(net[ip]) === 'open'; }).length;
+		var blockedN = uniq.length - openN;
+		if (!isAuto) {
+			if (openN) toast('✅ ' + openN + ' آی‌پی از اینترنت تو باز است.', 'ok');
+			if (blockedN) toast('🚫 ' + blockedN + ' آی‌پی از اینترنت تو بسته است — حذف نشد و در کانفیگ می‌ماند.', 'warn', 9000);
+		}
 	} catch (e) {
 		if (st) { st.style.display = ''; st.textContent = 'تست ناموفق: ' + (e && e.message ? e.message : e); }
-		toast('❌ تست آی‌پی ناموفق بود: ' + (e && e.message ? e.message : 'خطای ارتباط با سرور'), 'err', 9000);
+		if (!isAuto) toast('❌ تست آی‌پی ناموفق بود: ' + (e && e.message ? e.message : e), 'err', 9000);
 	} finally {
 		var btn2 = $('btnTestIps');
-		if (btn2) { btn2.disabled = false; btn2.innerHTML = '<svg><use href="#i-activity"/></svg>تست آی‌پی تمیز'; }
+		if (btn2) { btn2.disabled = false; btn2.innerHTML = '<svg><use href="#i-activity"/></svg>تست از نت خودم'; }
 	}
 }
 on($('btnTestIps'), 'click', function () { lmlTestIpsNow(); });
@@ -16741,7 +16784,7 @@ window.runGlobalProxyScanner = runGlobalProxyScanner;
 on($('setAutoScan'), 'change', function () { State.scanEnabled = this.checked; });
 
 /* ============================================================
-   36. BETA NOTICE / PUBLIC PROXY SCAN / QUICK CREATE
+   36. VERSION NOTICE / PUBLIC PROXY SCAN / QUICK CREATE
    ============================================================ */
 function initBetaNotice() {
 	var banner = $('betaBanner');
@@ -16788,66 +16831,74 @@ async function startPublicProxyScan() {
 	if (btn) btn.disabled = true;
 	try {
 		var wantCountry = (country && country !== 'ALL') ? country : '';
-		say('در حال دریافت لیست پروکسی‌های عمومی از منابع زنده...' + (wantCountry ? ' (کشور: ' + wantCountry + ')' : ''));
-		var listRes = await api('/api/proxy-list', { method: 'POST', body: { limit: maxTest, country: country || 'ALL' } });
-		var listData = await listRes.json().catch(function () { return {}; });
-		if (listData && listData.error) {
-			say('سرور خطا داد: ' + listData.error);
-			toast('⚠️ خطا در دریافت لیست', 'err');
-			return;
-		}
-		var lines = (listData && listData.proxies) ? listData.proxies.slice() : [];
-		if (!lines.length) {
-			say('هیچ پروکسی عمومی از منابع زنده دریافت نشد.\\n' +
-				(listData && listData.detail ? 'پاسخ منابع: ' + JSON.stringify(listData.detail) : '') +
-				'\\nدوباره تلاش کنید یا کشور را «همه» بگذارید.');
-			toast('⚠️ پروکسی عمومی یافت نشد', 'warn');
-			return;
-		}
-		say(lines.length + ' پروکسی از منابع زنده دریافت شد. در حال تست...');
-		for (var i2 = lines.length - 1; i2 > 0; i2--) { var j2 = Math.floor(Math.random() * (i2 + 1)); var tmp2 = lines[i2]; lines[i2] = lines[j2]; lines[j2] = tmp2; }
-		if (lines.length > maxTest) lines = lines.slice(0, maxTest);
+		/* باید وایسیم تا پیدا کنه — جست‌وجو در چند دور از گروه‌ها، کانفیگ‌ها و لیست‌های زنده؛
+		   هر دور لیست تازهٔ درهم‌ریخته می‌گیرد و تا رسیدن به پینگ هدف ادامه می‌دهد */
 		var BATCH = 5, best = null, fallback = null, triedCountryMiss = 0, tested = 0;
-			/* keep scanning until a proxy this fast is found, else use the fastest */
-			var PING_TARGET_MS = 110;
-		for (var b0 = 0; b0 < lines.length; b0 += BATCH) {
-			var batch = lines.slice(b0, b0 + BATCH);
-				tested += batch.length;
-				say('تعداد ' + lines.length + ' پروکسی آماده تست شد\\nدر حال اسکن گروه ' + (Math.floor(b0 / BATCH) + 1) + ' از ' + Math.ceil(lines.length / BATCH) +
-					' (' + tested + '/' + lines.length + ')' + (wantCountry ? ' · فقط ' + wantCountry : '') + ' ...');
-			var results = await Promise.all(batch.map(async function (cand) {
-				var ok = 0, sum = 0, fail = 0;
-				for (var t = 0; t < 3; t++) {
-					var ctrl = new AbortController();
-					var to = setTimeout(function () { try { ctrl.abort(); } catch (e) { } }, 3500);
-					try {
-						var res = await api('/api/test-proxy', { body: { proxy: cand, skip_country: !wantCountry }, signal: ctrl.signal });
-						var d = await res.json().catch(function () { return {}; });
-						if (res.ok && d && d.success) {
-							/* a specific country was asked for: only accept a match */
-							if (wantCountry && String(d.country || '').toUpperCase() !== wantCountry) {
-								triedCountryMiss++;
-								fail++;
-							} else { ok++; sum += (d.ping || 0); }
-						} else fail++;
-					} catch (e) { fail++; }
-					clearTimeout(to);
-					if (fail > 1) break;
+		var PING_TARGET_MS = 110;
+		var MAX_ROUNDS = 3;
+		for (var round = 1; round <= MAX_ROUNDS && !best; round++) {
+			if (round > 1) say('🔄 دور جست‌وجوی ' + round + ' از ' + MAX_ROUNDS + ' — وایستادیم تا پروکسی باکیفیت پیدا شود...');
+			else say('در حال جست‌وجو در گروه‌ها، کانفیگ‌ها و لیست‌های زندهٔ عمومی...' + (wantCountry ? ' (کشور: ' + wantCountry + ')' : ''));
+			var listRes = await api('/api/proxy-list', { method: 'POST', body: { limit: maxTest, country: country || 'ALL' } });
+			var listData = await listRes.json().catch(function () { return {}; });
+			if (listData && listData.error) {
+				say('سرور خطا داد: ' + listData.error);
+				toast('⚠️ خطا در دریافت لیست', 'err');
+				return;
+			}
+			var lines = (listData && listData.proxies) ? listData.proxies.slice() : [];
+			if (!lines.length) {
+				if (round >= MAX_ROUNDS) {
+					say('هیچ پروکسی عمومی از منابع زنده دریافت نشد (پس از ' + MAX_ROUNDS + ' دور جست‌وجو).\\n' +
+						(listData && listData.detail ? 'پاسخ منابع: ' + JSON.stringify(listData.detail) : '') +
+						'\\nدوباره تلاش کنید یا کشور را «همه» بگذارید.');
+					toast('⚠️ پروکسی عمومی یافت نشد', 'warn');
+					return;
 				}
-				return ok > 0 ? { proxy: cand, ok: ok, ping: sum / ok } : null;
-			}));
-			var good = results.filter(function (r) { return !!r; }).sort(function (a, c) { return (c.ok - a.ok) || (a.ping - c.ping); });
-			if (good.length) {
-				/* remember the best candidate seen so far - fastest first, then
-				   most reliable (the old code ignored latency here) */
-				if (!fallback ||
-					good[0].ok > fallback.ok ||
-					(good[0].ok === fallback.ok && good[0].ping < fallback.ping)) {
-					fallback = good[0];
+				continue;
+			}
+			say('دور ' + round + ': تعداد ' + lines.length + ' پروکسی از گروه‌ها و کانفیگ‌ها پیدا شد. در حال اسکن...');
+			for (var i2 = lines.length - 1; i2 > 0; i2--) { var j2 = Math.floor(Math.random() * (i2 + 1)); var tmp2 = lines[i2]; lines[i2] = lines[j2]; lines[j2] = tmp2; }
+			var roundTested = 0;
+			for (var b0 = 0; b0 < lines.length && !best; b0 += BATCH) {
+				var batch = lines.slice(b0, b0 + BATCH);
+				roundTested += batch.length; tested += batch.length;
+				say('تعداد ' + lines.length + ' پروکسی آماده تست شد (دور ' + round + ')\\nدر حال اسکن گروه ' + (Math.floor(b0 / BATCH) + 1) + ' از ' + Math.ceil(lines.length / BATCH) +
+					' (' + roundTested + '/' + lines.length + ')' + (wantCountry ? ' · فقط ' + wantCountry : '') + ' ...');
+				var results = await Promise.all(batch.map(async function (cand) {
+					var ok = 0, sum = 0, fail = 0;
+					for (var t = 0; t < 3; t++) {
+						var ctrl = new AbortController();
+						var to = setTimeout(function () { try { ctrl.abort(); } catch (e) { } }, 3500);
+						try {
+							var res = await api('/api/test-proxy', { body: { proxy: cand, skip_country: !wantCountry }, signal: ctrl.signal });
+							var d = await res.json().catch(function () { return {}; });
+							if (res.ok && d && d.success) {
+								/* a specific country was asked for: only accept a match */
+								if (wantCountry && String(d.country || '').toUpperCase() !== wantCountry) {
+									triedCountryMiss++;
+									fail++;
+								} else { ok++; sum += (d.ping || 0); }
+							} else fail++;
+						} catch (e) { fail++; }
+						clearTimeout(to);
+						if (fail > 1) break;
+					}
+					return ok > 0 ? { proxy: cand, ok: ok, ping: sum / ok } : null;
+				}));
+				var good = results.filter(function (r) { return !!r; }).sort(function (a, c) { return (c.ok - a.ok) || (a.ping - c.ping); });
+				if (good.length) {
+					/* remember the best candidate seen so far - fastest first, then
+					   most reliable (the old code ignored latency here) */
+					if (!fallback ||
+						good[0].ok > fallback.ok ||
+						(good[0].ok === fallback.ok && good[0].ping < fallback.ping)) {
+						fallback = good[0];
+					}
+					/* keep hunting while the latency is still poor: a proxy that
+					   answers at 400 ms is technically "working" but unusable */
+					if (good[0].ok >= 2 && good[0].ping <= PING_TARGET_MS) { best = good[0]; break; }
 				}
-				/* keep hunting while the latency is still poor: a proxy that
-				   answers at 400 ms is technically "working" but unusable */
-				if (good[0].ok >= 2 && good[0].ping <= PING_TARGET_MS) { best = good[0]; break; }
 			}
 		}
 		if (!best && fallback) best = fallback;
@@ -16858,9 +16909,9 @@ async function startPublicProxyScan() {
 			toast('✅ بهترین پروکسی عمومی اعمال شد', 'ok');
 			setTimeout(function () { closeModal('modalProxyScan'); testUserSocksProxy(); }, 1400);
 		} else {
-			say('هیچ پروکسی عمومی سالمی یافت نشد (' + tested + ' مورد تست شد).\\n' +
+			say('هیچ پروکسی عمومی سالمی یافت نشد (' + tested + ' مورد در ' + MAX_ROUNDS + ' دور تست شد).\\n' +
 				(wantCountry ? 'هیچ‌کدام با کشور ' + wantCountry + ' مطابقت نداشت.\\n' : '') +
-				'کشور را «همه» بگذارید یا تعداد را بیشتر کنید.');
+				'کشور را «همه» بگذارید، تعداد را بیشتر کنید یا دوباره تلاش کنید.');
 			toast('⚠️ پروکسی سالمی یافت نشد', 'warn');
 		}
 	} catch (e) {
@@ -17934,13 +17985,11 @@ ${COMMON_TOAST_HTML}
 			/* TLS links always use the domain; IPs only on plain-HTTP ports -> no SSL error ever */
 			var ips = [host];
 			var cleanIps = [];
-			if (Array.isArray(u.ips_valid)) cleanIps = u.ips_valid.slice(0, 4); /* LEAN */
+			if (Array.isArray(u.ips_valid)) cleanIps = u.ips_valid.slice(0, 40); /* v1.0.2: همهٔ آی‌پی‌های کاربر */
 			var ports = String(u.port || '443').split(',').map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; });
-			/* TLS-ONLY: keep encrypted (TLS) ports only; never leave the list empty */
+			/* v1.0.2: همهٔ پورت‌های کاربر بدون فیلتر و بدون برش */
 			var STATUS_TLS_PORTS = ["443", "2053", "2083", "2087", "2096", "8443"];
-			var tlsOnlyPorts = ports.filter(function(p) { return STATUS_TLS_PORTS.indexOf(p) >= 0; });
-			ports = tlsOnlyPorts.length ? tlsOnlyPorts : ["443"];
-			ports = ports.slice(0, 2); /* LEAN */
+			if (!ports.length) ports = ["443"];
 			var fpPoolSt = ['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', '360', 'qq'];
 			var fpRawSt = String(u.fingerprint || 'chrome').toLowerCase();
 			var fp = (fpRawSt === 'random' || fpRawSt === 'randomized') ? fpPoolSt[Math.floor(Math.random() * fpPoolSt.length)] : (u.fingerprint || 'chrome');
@@ -18011,8 +18060,8 @@ ${COMMON_TOAST_HTML}
 			/* v1.0.0-FINAL: بدون فیلتر — همهٔ آی‌پی‌ها در کانفیگ می‌مانند */
 			var tlsIpsSt2 = cleanIps.slice();
 			var lmlEntries = [];
-			tlsIpsSt2.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: true, ip: cip }); }); });
-			ips.forEach(function (hh) { ports.forEach(function (p) { lmlEntries.push({ addr: hh, port: p, tls: true, ip: '' }); }); });
+			tlsIpsSt2.forEach(function (cip) { ports.forEach(function (p) { lmlEntries.push({ addr: cip, port: p, tls: STATUS_TLS_PORTS.indexOf(p) >= 0, ip: cip }); }); });
+			ips.forEach(function (hh) { ports.forEach(function (p) { lmlEntries.push({ addr: hh, port: p, tls: STATUS_TLS_PORTS.indexOf(p) >= 0, ip: '' }); }); });
 			lmlEntries.forEach((entry) => {
 				resolvedProxies.forEach((proxy) => {
 						const ip = entry.addr;
@@ -18023,7 +18072,7 @@ ${COMMON_TOAST_HTML}
 						const isChainedSt = String(proxy.currentDynPath).indexOf("loc-") >= 0;
 						const chainFlagSt = (isChainedSt && proxy.flagEmoji && proxy.flagEmoji !== "🌐") ? (proxy.flagEmoji + " ") : "";
 						const ipPartSt = entry.ip ? (entry.ip + " ") : "";
-						const exitFlagSt = isChainedSt ? chainFlagSt : (u.colo_flag ? u.colo_flag + ' ' : '');
+						const exitFlagSt = (isChainedSt && chainFlagSt) ? chainFlagSt : "🌐 "; /* بدون پرچم دیتاسنتر در نام لینک */
 						let userFrag = "";
 						if (u.frag_len && u.frag_int) userFrag += "&fragment=" + encodeURIComponent(u.frag_len + "," + u.frag_int + (isTlsPort ? ",tlshello" : ""));
 						if (u.advanced_frag) userFrag += "&fm=" + encodeURIComponent(u.advanced_frag);
