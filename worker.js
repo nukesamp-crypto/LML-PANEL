@@ -1,5 +1,5 @@
 import { connect } from "cloudflare:sockets";
-const LML_SCANNER_RELEASE = {"version": "1.0.2", "build": "socks-giant-20260929e", "notes": ["🧦 جست‌وجوی ساکس عمومی: از گروه‌های تلگرامی، کانفیگ‌های عمومی و لیست‌های زندهٔ جهانی جمع می‌شود و پنل تا پیدا شدن ساکس باکیفیت، دوربه‌دور (تا ۳ دور) به جست‌وجو ادامه می‌دهد", "📶 فرگمنت قوی‌تر: موتور غول حالا پکت‌های ریزتر با پخش زمانی گسترده می‌سازد و ماسک چندلایه با نویز هم اضافه شد", "📱 هیدیفای و برنامه‌های مشابه: فرگمنت به‌صورت خودکار روی اشتراک فعال می‌شود و برای کاربران زنجیره‌دار، ساکس با فرمت Sing-box به‌درستی اعمال می‌گردد", "🧹 پاک‌سازی کامل نام‌ها و برچسب‌ها از کامنت‌ها و متن‌های پنل"]};
+const LML_SCANNER_RELEASE = {"version": "1.0.3", "build": "karing-flags-giant-20260930a", "notes": ["📦 Sing-box & Karing: every server (IP × port × protocol) is now its own outbound, plus a manual selector group and an automatic urltest group — Karing and Hiddify show all of your configs instead of only two", "🚩 Country flags are back in config names: direct configs show the flag of your nearest Cloudflare exit datacenter (your real exit) and chained configs show the exit proxy country", "🛡 Giant fragment engine v2 (bigger & stronger): wider split lengths, wider delay spread, a dual-layer packet mask and double UDP noise — every saved profile automatically gets the stronger values when the subscription is generated", "🩺 TLS error fixes: fragment/mask parameters are no longer attached to non-TLS links (they broke plain connections) and the old 1.0.2 mask auto-upgrades to v2"]};
 
 function safeWaitUntil(ctx, promise) {
 	if (ctx && typeof ctx.waitUntil === "function") {
@@ -11,9 +11,9 @@ function safeWaitUntil(ctx, promise) {
 	}
 }
 
-const LML_PANEL_VERSION = "1.0.2";
-/* شناسهٔ ماشینی بروزرسانی: 1.0.2 از 1.0.1.x جدیدتر است — پنل‌های قدیمی‌تر آن را به‌عنوان نسخهٔ جدید می‌بینند */
-var CURRENT_VERSION = '1.0.2';
+const LML_PANEL_VERSION = "1.0.3";
+/* شناسهٔ ماشینی بروزرسانی: 1.0.3 از 1.0.2 جدیدتر است — پنل‌های قدیمی‌تر آن را به‌عنوان نسخهٔ جدید می‌بینند */
+var CURRENT_VERSION = '1.0.3';
 let LML_UPDATE_CHECK_CACHE = null;
 function lmlVersionCompare(a, b) {
 	const na = String(a || "0").split(".").map(function (x) { return parseInt(x, 10) || 0; });
@@ -974,6 +974,49 @@ function lmlColoCountry(colo) {
 	return LML_COLO_CC[c] || "";
 }
 
+/* ============================================================
+   v1.0.3 GIANT-FM v2 — ماسک چندلایهٔ فرگمنت، بزرگ‌تر و قوی‌تر:
+   لایهٔ ۱: خردکردن ClientHello با بازهٔ طول گسترده‌تر (۸ تا ۱۲۰) و پخش زمانی بلندتر (۵ تا ۴۰)
+   لایهٔ ۲: تقسیم اضافی دو پکت اول تا ۱۶ تکه
+   UDP: دو پکت نویز (به‌جای یکی)
+   ============================================================ */
+const LML_FM_GIANT_V2 = '{"tcp": [{"type": "fragment", "settings": {"packets": "tlshello", "lengths": ["8", "120", "1"], "delays": ["5", "40"], "maxSplit": "0"}},{"type": "fragment", "settings": {"packets": "1-2", "lengths": ["90", "1"], "delays": ["2", "15"], "maxSplit": "16"}}],"udp": [{"type": "noise", "settings": {"noise": [{"rand": "10-30", "delay": "5-20"},{"rand": "20-60", "delay": "15-35"}]}}]}';
+/* ماسک قدیمی (v1.0.2) — اگر در پروفایل کاربر ذخیره باشد، هنگام خروجی خودکار به ماسک جدید ارتقا می‌یابد */
+const LML_FM_GIANT_V1 = '{"tcp": [{"type": "fragment", "settings": {"packets": "tlshello", "lengths": ["10", "80", "1"], "delays": ["5", "20"], "maxSplit": "0"}},{"type": "fragment", "settings": {"packets": "1-1", "lengths": ["114", "1"], "delays": ["1"], "maxSplit": "11"}}],"udp": [{"type": "noise", "settings": {"noise": [{"rand": "10-20", "delay": "10-16"}]}}]}';
+function lmlNormFm(s) { return String(s || "").replace(/\s+/g, ""); }
+function lmlFmFor(userFm) {
+	const u = lmlNormFm(userFm);
+	if (!u || u === lmlNormFm(LML_FM_GIANT_V1)) return LML_FM_GIANT_V2;
+	return String(userFm);
+}
+/* v1.0.3 FRAG-BOOST: تقویت مقدار فرگمنت هنگام ساخت اشتراک —
+   بازهٔ طول ×0.6 تا ×1.5 (سقف ۱۵۰۰) و بازهٔ فاصله ×0.75 تا ×2 (سقف ۱۰۰).
+   نتیجه: پکت‌های بیشتر و پخش زمانی گسترده‌تر => عبور قوی‌تر از فیلترینگ. */
+function lmlBoostRange(str, loMul, hiMul, loCap, hiCap) {
+	const s = String(str || "").trim();
+	if (!s) return "";
+	const parts = s.split("-");
+	if (parts.length >= 2) {
+		const a = parseFloat(parts[0]);
+		const b = parseFloat(parts[1]);
+		if (!isFinite(a) || !isFinite(b) || a <= 0 || b <= 0) return s;
+		const lo = Math.max(loCap, Math.floor(Math.min(a, b) * loMul));
+		const hi = Math.min(hiCap, Math.max(lo + 1, Math.ceil(Math.max(a, b) * hiMul)));
+		return lo + "-" + hi;
+	}
+	const n = parseFloat(s);
+	if (!isFinite(n) || n <= 0) return s;
+	const lo2 = Math.max(loCap, Math.floor(n * loMul));
+	const hi2 = Math.min(hiCap, Math.max(lo2 + 1, Math.ceil(n * hiMul)));
+	return lo2 + "-" + hi2;
+}
+function lmlFragBoost(len, int) {
+	return {
+		len: lmlBoostRange(len, 0.6, 1.5, 1, 1500),
+		int: lmlBoostRange(int, 0.75, 2, 1, 100)
+	};
+}
+
 function lmlShuffle(arr) {
 	const a = (arr || []).slice();
 	for (let i = a.length - 1; i > 0; i--) {
@@ -1876,14 +1919,14 @@ const Router = {
 				return await SubscriptionService.generateV2rayJson(user, host);
 			}
 			if (url.pathname.startsWith("/singbox/") || format === "singbox" || ua.includes("sing-box")) {
-				return await SubscriptionService.generateSingbox(user, host);
+				return await SubscriptionService.generateSingbox(user, host, String((request.cf && request.cf.colo) || ""), env);
 			}
 			/* HID-CHAIN: لینک متنی نمی‌تواند زنجیرهٔ ساکس را حمل کند — برای کاربر زنجیره‌دار،
 			   هیدیفای و برنامه‌های مبتنی بر sing-box به‌جای متن، ساب JSON می‌گیرند تا
 			   پروکسی خروجی (ساکس عمومی) واقعاً روی اتصال اعمال شود */
 			const hasChainHid = !!(user.user_socks5 || user.user_proxy_ip);
-			if (hasChainHid && /hiddify|sing-box|singbox|husi/i.test(ua)) {
-				return await SubscriptionService.generateSingbox(user, host);
+			if (hasChainHid && /hiddify|sing-box|singbox|husi|karing/i.test(ua)) {
+				return await SubscriptionService.generateSingbox(user, host, String((request.cf && request.cf.colo) || ""), env);
 			}
 			return await SubscriptionService.generateText(user, host, ctx, env, String((request.cf && request.cf.colo) || ""), lmlCrowdRegion(request), String((request.cf && request.cf.asOrganization) || ""));
 		} catch (err) {
@@ -4829,18 +4872,21 @@ rules:
 		});
 	},
 
-	async generateSingbox(user, host) {
+	async generateSingbox(user, host, coloHint = "", env = null) {
 		const uuid = user.uuid;
-		const path = "/stream/LML_PANEL/" + ((uuid || "").split("-")[4] || "default");
+		const rawPathSb = "/stream/LML_PANEL/" + ((uuid || "").split("-")[4] || "default");
 		/* زنجیرهٔ پروکسی کاربر (ساکس/http) — خروجی همان کشوری که مدیر چیده */
 		let socksOuts = [];
 		let detourTag = null;
+		let chainCcSb = "";
 		try {
-			let plist = [];
-			if (user.user_socks5 && String(user.user_socks5).trim().startsWith("[")) plist = JSON.parse(user.user_socks5);
-			else if (user.user_socks5 || user.user_proxy_ip) plist = [user.user_socks5 || user.user_proxy_ip];
-			plist = (Array.isArray(plist) ? plist : []).map(function (p) { return (p && typeof p === "object") ? p.proxy : p; }).filter(function (p) { return p && String(p).trim(); });
-			plist.slice(0, 3).forEach(function (pstr, pi) {
+			let plistRaw = [];
+			if (user.user_socks5 && String(user.user_socks5).trim().startsWith("[")) plistRaw = JSON.parse(user.user_socks5);
+			else if (user.user_socks5 || user.user_proxy_ip) plistRaw = [user.user_socks5 || user.user_proxy_ip];
+			if (!Array.isArray(plistRaw)) plistRaw = [];
+			plistRaw.forEach(function (p) { if (!chainCcSb && p && typeof p === "object" && p.country) chainCcSb = String(p.country).toUpperCase(); });
+			const pstrsSb = plistRaw.map(function (p) { return (p && typeof p === "object") ? p.proxy : p; }).filter(function (p) { return p && String(p).trim(); });
+			pstrsSb.slice(0, 3).forEach(function (pstr, pi) {
 				const m = /^(socks5|socks4|http|https):\/\/(?:([^@/]+)@)?([^:/]+):(\d{2,5})/i.exec(String(pstr).trim());
 				if (!m) return;
 				const tag = "🌍 LOC-" + (pi + 1);
@@ -4851,39 +4897,107 @@ rules:
 				if (!detourTag) detourTag = tag;
 			});
 		} catch (e) { }
-		/* HID-FRAG: قبلاً جای فیلدها عوض بود (interval جای packets نوشته می‌شد!) —
-		   حالا استاندارد sing-box: packets=tlshello · length=طول · interval=بازه؛ بدون اجبار وقتی فرگمنت انتخاب نشده */
-		const fragLen = String(user.frag_len || "").trim();
-		const fragInt = String(user.frag_int || "").trim();
-		const vlessOut = {
-			"type": "vless",
-			"tag": "⚡ LML-OUTBOUND",
-			"server": host,
-			"server_port": 443,
-			"uuid": uuid,
-			"tls": {
-				"enabled": true,
-				"server_name": host,
-				"insecure": false,
-				"utls": { "enabled": true, "fingerprint": String(user.fingerprint || "chrome") }
-			},
-			"transport": { "type": "ws", "path": path, "headers": { "Host": host }, "max_early_data": 2048, "early_data_header_name": "Sec-WebSocket-Protocol" },
-			"tcp_fast_open": true
-		};
-		if (detourTag) vlessOut.detour = detourTag;
-		if (fragLen && fragInt) vlessOut.tls.fragment = { "packets": "tlshello", "length": fragLen, "interval": fragInt };
+		if (!chainCcSb) chainCcSb = String(user.user_proxy_iata || "").toUpperCase();
+		const isChainedSb = !!detourTag;
+		/* v1.0.3 EXIT-FLAG (بازگشت پرچم): زنجیره‌ای = پرچم کشور پروکسی خروجی،
+		   مستقیم = پرچم نزدیک‌ترین دیتاسنتر کلودفلر به کاربر (خروجی واقعی اتصال)؛ ناشناس = 🌐 */
+		const exitFlagSb = isChainedSb ? lmlFlagEmoji(chainCcSb) : lmlFlagEmoji(lmlColoCountry(coloHint));
+		/* v1.0.3 KARING-FIX: به‌جای یک outbound تنها، برای هر سرور (آی‌پی × پورت × پروتکل)
+		   یک outbound مجزا با همان نام‌های ساب متنی + گروه «انتخاب دستی» (selector) و
+		   «خودکار/سریع‌ترین» (urltest) => کارینگ و هیدیفای همهٔ کانفیگ‌ها را می‌بینند */
+		let ipsSb = [host];
+		const parsedUserIpsSb = String(user.ips || "").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
+		if (parsedUserIpsSb.length > 0) ipsSb = parsedUserIpsSb;
+		let lmlHostSb = host;
+		try { lmlHostSb = (await lmlPanelHostResolve(env, host)) || host; } catch (e) { lmlHostSb = host; }
+		let lmlIpsSb = [];
+		{
+			const rawIpsSb = ipsSb.filter(function (x) { return String(x).trim() && String(x).trim().toLowerCase() !== String(lmlHostSb).toLowerCase(); });
+			if (rawIpsSb.length) lmlIpsSb = lmlOnlyCfIps(rawIpsSb, 400);
+		}
+		if (lmlIpsSb.length && env) {
+			try {
+				const badIpsSb = await lmlGetBadIps(env);
+				/* آی‌پی‌های خود کاربر هرگز حذف نمی‌شوند */
+				lmlIpsSb = lmlIpsSb.filter(function (ip) { return !badIpsSb[ip] || lmlIpInCf(ip) || parsedUserIpsSb.indexOf(ip) >= 0; });
+			} catch (e) { }
+		}
+		let portsSb = String(user.port || "443").split(",").map(function (p) { return p.trim(); }).filter(function (p) { return p.length > 0; });
+		if (!portsSb.length) portsSb = ["443"];
+		let spareDomainsSb = [];
+		if (env) { try { spareDomainsSb = await lmlGetSpareDomains(env); } catch (e) { } }
+		const entriesSb = [];
+		lmlIpsSb.forEach(function (ipSb) { portsSb.forEach(function (pSb) { entriesSb.push({ addr: ipSb, port: pSb, tls: TLS_PORTS.has(pSb), ip: ipSb }); }); });
+		portsSb.forEach(function (pSb) { entriesSb.push({ addr: lmlHostSb, port: pSb, tls: TLS_PORTS.has(pSb), ip: "" }); });
+		spareDomainsSb.forEach(function (sdSb) { portsSb.forEach(function (pSb) { entriesSb.push({ addr: sdSb, port: pSb, tls: TLS_PORTS.has(pSb), ip: "", sni: sdSb }); }); });
+		const connTypeSb = String(user.connection_type || "vless").toLowerCase();
+		const enableVlessSb = connTypeSb.includes("vless") || (!connTypeSb.includes("trojan") && !connTypeSb.includes("shadowsocks"));
+		const enableTrojanSb = connTypeSb.includes("trojan");
+		const enableSSSb = connTypeSb.includes("shadowsocks");
+		const fpPoolSb = ["chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq"];
+		const fpRawSb = String(user.fingerprint || "chrome").toLowerCase();
+		const fpSb = (fpRawSb === "random" || fpRawSb === "randomized") ? fpPoolSb[Math.floor(Math.random() * fpPoolSb.length)] : (user.fingerprint || "chrome");
+		/* v1.0.3 FRAG-BOOST: فرگمنت قوی‌تر (بازهٔ گسترده‌تر) — فقط روی پورت TLS؛
+		   روی پورت غیرTLS هرگز fragment نمی‌نشیند (رفع خطای TLS) */
+		const fragOnSb = !!(String(user.frag_len || "").trim() && String(user.frag_int || "").trim());
+		const boostSb = fragOnSb ? lmlFragBoost(user.frag_len, user.frag_int) : null;
+		const proxyOuts = [];
+		const usedTagsSb = {};
+		entriesSb.forEach(function (entry) {
+			const portNoteSb = (portsSb.length > 1) ? (" :" + entry.port) : "";
+			const ipPartSb = entry.ip ? (entry.ip + " ") : "";
+			let tagSb = "LML | " + exitFlagSb + " " + ipPartSb + (user.username || "user") + portNoteSb;
+			if (usedTagsSb[tagSb]) { usedTagsSb[tagSb]++; tagSb = tagSb + " #" + usedTagsSb[tagSb]; } else { usedTagsSb[tagSb] = 1; }
+			const sniSb = entry.sni || lmlHostSb;
+			const transportSb = { "type": "ws", "path": rawPathSb, "headers": { "Host": sniSb }, "max_early_data": 2048, "early_data_header_name": "Sec-WebSocket-Protocol" };
+			const mkTlsSb = function () {
+				const t = { "enabled": true, "server_name": sniSb, "insecure": entry.ip ? true : false, "utls": { "enabled": true, "fingerprint": fpSb } };
+				if (boostSb) t.fragment = { "packets": "tlshello", "length": boostSb.len, "interval": boostSb.int };
+				return t;
+			};
+			const portNumSb = Number(entry.port) || 443;
+			if (enableVlessSb) {
+				const o = { "type": "vless", "tag": tagSb, "server": entry.addr, "server_port": portNumSb, "uuid": uuid, "transport": transportSb, "tcp_fast_open": true };
+				if (entry.tls) o.tls = mkTlsSb();
+				if (detourTag) o.detour = detourTag;
+				proxyOuts.push(o);
+			}
+			if (enableTrojanSb) {
+				const o = { "type": "trojan", "tag": tagSb + " [T]", "server": entry.addr, "server_port": portNumSb, "password": uuid, "transport": transportSb, "tcp_fast_open": true };
+				if (entry.tls) o.tls = mkTlsSb();
+				if (detourTag) o.detour = detourTag;
+				proxyOuts.push(o);
+			}
+			if (enableSSSb) {
+				const o = { "type": "shadowsocks", "tag": tagSb + " [SS]", "server": entry.addr, "server_port": portNumSb, "method": "aes-256-gcm", "password": uuid, "plugin": "v2ray-plugin", "plugin_opts": "mode=websocket;host=" + sniSb + ";path=" + rawPathSb + (entry.tls ? ";tls" : "") };
+				if (detourTag) o.detour = detourTag;
+				proxyOuts.push(o);
+			}
+		});
+		/* گروه‌ها: انتخاب دستی + خودکارِ سریع‌ترین — در کارینگ/هیدیفای هر دو به‌عنوان کانفیگ دیده می‌شوند */
+		const groupOuts = [];
+		const allTagsSb = proxyOuts.map(function (o) { return o.tag; });
+		let primaryTagSb = "direct";
+		if (allTagsSb.length) {
+			const selTagSb = "🧭 LML | انتخاب سرور";
+			groupOuts.push({ "type": "selector", "tag": selTagSb, "outbounds": allTagsSb.slice() });
+			if (allTagsSb.length > 1) {
+				groupOuts.push({ "type": "urltest", "tag": "⚡ LML | خودکار (سریع‌ترین)", "outbounds": allTagsSb.slice(), "url": "https://www.gstatic.com/generate_204", "interval": 60, "tolerance": 50, "idle_timeout": 300 });
+			}
+			primaryTagSb = selTagSb;
+		}
 		const routeRules = [];
 		if (user.block_ads) routeRules.push({ "geosite": ["category-ads-all"], "outbound": "block" });
 		if (user.block_porn) routeRules.push({ "geosite": ["category-porn"], "outbound": "block" });
 		routeRules.push({ "ip_is_private": true, "outbound": "direct" });
 		routeRules.push({ "geoip": ["ir"], "outbound": "direct" });
 		routeRules.push({ "geosite": ["ir"], "outbound": "direct" });
-		routeRules.push({ "final": "⚡ LML-OUTBOUND" });
+		routeRules.push({ "final": primaryTagSb });
 		const config = {
 			"log": { "level": "warn" },
 			"dns": {
 				"servers": [
-					{ "tag": "dns-remote", "address": "https://8.8.8.8/dns-query", "detour": (detourTag || "⚡ LML-OUTBOUND") },
+					{ "tag": "dns-remote", "address": "https://8.8.8.8/dns-query", "detour": primaryTagSb },
 					{ "tag": "dns-local", "address": "local", "detour": "direct" }
 				],
 				"rules": [
@@ -4895,7 +5009,7 @@ rules:
 			"inbounds": [
 				{ "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080 }
 			],
-			"outbounds": [vlessOut].concat(socksOuts).concat([
+			"outbounds": groupOuts.concat(proxyOuts).concat(socksOuts).concat([
 				{ "type": "direct", "tag": "direct" },
 				{ "type": "block", "tag": "block" },
 				{ "type": "dns", "tag": "dns-out" }
@@ -4908,7 +5022,9 @@ rules:
 		return new Response(JSON.stringify(config, null, 2), {
 			headers: {
 				"Content-Type": "application/json; charset=utf-8",
-				"Content-Disposition": 'inline; filename="lml-singbox.json"'
+				"Content-Disposition": 'inline; filename="lml-singbox.json"',
+				"Cache-Control": "no-store",
+				"profile-title": "LML CONNECT"
 			}
 		});
 	},
@@ -5136,22 +5252,28 @@ rules:
 					const isTlsPort = entry.tls;
 					const isChainedGt = String(proxy.currentDynPath).indexOf("loc-") >= 0;
 					const chainFlagGt = (isChainedGt && proxy.flagEmoji && proxy.flagEmoji !== "🌐") ? (proxy.flagEmoji + " ") : "";
-					/* v1.0.1 EXIT-FLAG: پرچم «خروجی واقعی» — زنجیره‌ای = کشور پروکسی خروجی،
-					   مستقیم = کشور دیتاسنتر (colocloudflare) که ترافیک واقعاً از آنجا خارج می‌شود.
-					   کشور ثبتی خود آی‌پی (که برای Anycast کلودفلر تقریباً همیشه آمریکاست و گمراه‌کننده بود) حذف شد. */
-					/* پرچم کشور داخل نام لینک نمی‌آید — در بسیاری از کلاینت‌ها پرچم به‌صورت
-					   دو حرف لاتین (NL/DE/RO) نمایش داده می‌شود و کاربر فکر می‌کند خروجی‌اش آن کشور است،
-					   درحالی‌که آن فقط دیتاسنتر ورودی کلودفلر بود. مستقیم = 🌐 ، زنجیره‌ای = کشور پروکسی
-					   خروجی. */
-					const exitFlagGt = (isChainedGt && chainFlagGt) ? chainFlagGt : "🌐 ";
+					/* v1.0.3 EXIT-FLAG (بازگشت پرچم به درخواست کاربران): زنجیره‌ای = پرچم کشور پروکسی خروجی،
+					   مستقیم = پرچم نزدیک‌ترین دیتاسنتر کلودفلر به کاربر (خروجی واقعی اتصال).
+					   کشور ثبتی خود آی‌پی هرگز استفاده نمی‌شود (برای Anycast تقریباً همیشه آمریکاست و گمراه‌کننده بود).
+					   دیتاسنتر ناشناس یا پروکسی ناشناس => 🌐 */
+					const exitFlagGt = isChainedGt ? (chainFlagGt || "🌐 ") : (lmlIpFlag || "🌐 ");
 					const ipPartGt = entry.ip ? (entry.ip + " ") : "";
 					const remarkBase = "LML | " + exitFlagGt + ipPartGt + user.username;
 					const tlsVal = isTlsPort ? "tls" : "none";
+					/* v1.0.3 FRAG-BOOST: فرگمنت/ماسک فقط روی لینک TLS (روی لینک بدون TLS موجب
+					   خطای اتصال می‌شد)؛ مقدار خروجی خودکار بزرگ‌تر و قوی‌تر از انتخاب ذخیره‌شده
+					   (بازهٔ طول و پخش زمانی گسترده‌تر) و ماسک چندلایهٔ غول v2 به همهٔ لینک‌های
+					   فرگمنت‌دار اضافه می‌شود تا کلاینت‌های جدید هم کامل اعمال کنند. */
 					let userFrag = "";
-					if (user.frag_len && user.frag_int) userFrag += "&fragment=" + encodeURIComponent(user.frag_len + "," + user.frag_int + (isTlsPort ? ",tlshello" : ""));
-					if (user.advanced_frag) userFrag += "&fm=" + encodeURIComponent(user.advanced_frag);
+					if (isTlsPort && user.frag_len && user.frag_int) {
+						const boostGt = lmlFragBoost(user.frag_len, user.frag_int);
+						userFrag += "&fragment=" + encodeURIComponent(boostGt.len + "," + boostGt.int + ",tlshello");
+						userFrag += "&fm=" + encodeURIComponent(lmlFmFor(user.advanced_frag));
+					} else if (isTlsPort && user.advanced_frag) {
+						userFrag += "&fm=" + encodeURIComponent(lmlFmFor(user.advanced_frag));
+					}
 					if (isTlsPort && user.cipher_suites) userFrag += "&cs=" + encodeURIComponent(user.cipher_suites);
-					if (user.tls_mask) userFrag += "&mask=" + encodeURIComponent(user.tls_mask);
+					if (isTlsPort && user.tls_mask) userFrag += "&mask=" + encodeURIComponent(user.tls_mask);
 						
 					const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
 					const fpUse = fp; /* v1.0.2: اثرانگشت ثابت برای همهٔ لینک‌ها (انتخاب کاربر یا chrome) */
@@ -9631,7 +9753,7 @@ const HTML_TEMPLATES = {
 		<main class="content" id="content">
 			<div class="beta-banner" id="betaBanner">
 				<svg style="width:16px;height:16px;flex:0 0 auto;color:var(--warn);margin-top:2px"><use href="#i-alert"/></svg>
-				<div><b>🎉 به نسخهٔ پایدار 1.0.2 خوش آمدید!</b> اکنون هر آی‌پی و پورتی که وارد کنید، بدون برش و به همان ترتیب داخل ساب می‌نشیند و فرگمنت فقط با انتخاب خودتان فعال می‌شود. قبل از هر به‌روزرسانی از دیتابیس خود بکاپ بگیرید.</div>
+				<div><b>🎉 به نسخهٔ پایدار 1.0.3 خوش آمدید!</b> کارینگ و سینگ‌باکس اکنون همهٔ سرورهای کاربر را جداگانه می‌بینند (به‌همراه گروه انتخاب دستی و خودکار)، پرچم کشور به نام کانفیگ‌ها برگشت و موتور فرگمنت غول بزرگ‌تر و قوی‌تر شد — همراه با رفع خطای TLS در کانفیگ‌های غیرTLS. قبل از هر به‌روزرسانی از دیتابیس خود بکاپ بگیرید.</div>
 				<button type="button" class="icon-btn bb-x" id="btnBetaClose" title="بستن"><svg><use href="#i-x"/></svg></button>
 			</div>
 <!-- ==================== DASHBOARD ==================== -->
@@ -9639,7 +9761,7 @@ const HTML_TEMPLATES = {
 				<div class="lml-hero">
 					<div class="lml-hero-mark"><svg viewBox="0 0 46 40" aria-hidden="true"><defs><linearGradient id="lmlGradHero" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#7c8cff"/><stop offset="100%" stop-color="#22d3ee"/></linearGradient></defs><rect x="1" y="1" width="44" height="38" rx="12" fill="url(#lmlGradHero)"/><g fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13v14h6"/><path d="M20 27V13l4.5 8.5L29 13v14"/><path d="M35 13v14h6"/></g></svg></div>
 					<div class="lml-hero-txt">
-						<div class="lml-hero-name">LML PANEL <span class="lml-ver" id="lmlVer">v1.0.2</span></div>
+						<div class="lml-hero-name">LML PANEL <span class="lml-ver" id="lmlVer">v1.0.3</span></div>
 						<div class="lml-hero-sub">مدیریت یکپارچه سرویس‌های کانفیگ</div>
 					</div>
 					<div class="lml-hero-free">
@@ -10957,8 +11079,8 @@ const HTML_TEMPLATES = {
 
 						<!-- ---------- STEP 3 : PROXY ---------- -->
 						<div class="vtab-pane hidden" id="vtab-proxy">
-							<div class="note" style="margin-bottom:10px"><svg><use href="#i-info"/></svg><div>پروکسی‌ها <b>فقط از منابع عمومیِ زنده</b> اسکن و با تست واقعی (handshake + CONNECT + پینگ) انتخاب می‌شوند — بدون هیچ مخزن VIP. پروکسی انتخابی به کانفیگ کاربر زنجیر می‌شود و کشور خروجی او را تعیین می‌کند (برای کاربر زنجیره‌دار در هیدیفای، اشتراک به‌صورت خودکار با فرمت Sing-box ارسال می‌شود تا ساکس واقعی اعمال شود)؛ کانفیگ‌های زنجیره‌ای 🌐 به‌دلیل آی‌پی ثابت، برای سایت‌های حساس به لوکیشن مناسب‌ترند.</div></div>
-							<div class="note warn" style="margin-bottom:12px"><svg><use href="#i-alert"/></svg><div>هشدار: هنگام اتصال به کانفیگ‌های 🌐 (پروکسی‌دار)، از باز کردن پنل با همان اتصال خودداری کنید (باعث قطع و اختلال در عملکرد پنل می‌شود).</div></div>
+							<div class="note" style="margin-bottom:10px"><svg><use href="#i-info"/></svg><div>پروکسی‌ها <b>فقط از منابع عمومیِ زنده</b> اسکن و با تست واقعی (handshake + CONNECT + پینگ) انتخاب می‌شوند — بدون هیچ مخزن VIP. پروکسی انتخابی به کانفیگ کاربر زنجیر می‌شود و کشور خروجی او را تعیین می‌کند (برای کاربر زنجیره‌دار در هیدیفای، اشتراک به‌صورت خودکار با فرمت Sing-box ارسال می‌شود تا ساکس واقعی اعمال شود)؛ کانفیگ‌های زنجیره‌ای (پرچم کشور پروکسی در نامشان درج می‌شود) به‌دلیل آی‌پی خروجی ثابت، برای سایت‌های حساس به لوکیشن مناسب‌ترند.</div></div>
+							<div class="note warn" style="margin-bottom:12px"><svg><use href="#i-alert"/></svg><div>هشدار: هنگام اتصال به کانفیگ‌های پروکسی‌دار (زنجیره‌ای)، از باز کردن پنل با همان اتصال خودداری کنید (باعث قطع و اختلال در عملکرد پنل می‌شود).</div></div>
 							<div class="grid g-3" style="margin-bottom:14px">
 								<div class="kv"><span class="k">پینگ شما به کلودفلر</span><span class="v" id="pingClient2">—</span></div>
 								<div class="kv"><span class="k">کلودفلر به نت آزاد</span><span class="v" id="pingServer2">—</span></div>
@@ -11276,7 +11398,7 @@ const HTML_TEMPLATES = {
 	</div>
 </div>
 
-<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.2 • همه‌چیز داخل پنل</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
+<div class="modal" id="modalIps"><div class="modal-card"><div class="modal-head"><div class="mh-text"><h3 class="modal-title">🚀 اسکنر غول LML</h3><p class="modal-sub">نسخه 1.0.3 • همه‌چیز داخل پنل</p></div><button class="icon-btn" data-close-modal="modalIps">×</button></div><div class="modal-body">
 <h4 style="margin-top:2px">🚀 اسکنر غول — شکارچی لبهٔ کلودفلر (روی اینترنت خودتان)</h4>
 <div class="note"><svg><use href="#i-info"/></svg><div>بدون نیاز به هیچ ابزار اضافه — موتور <b>همین‌جا در مرورگر، روی نت خودتان</b> اجرا می‌شود: نامزدها از مخزن غول پنل + رنج‌های زندهٔ کلودفلر (رسمی، جدید و BGP جهانی) جمع می‌شوند، و بعد <b>دسته‌دسته تا رسیدن به عدد هدف شما</b> (مثلاً دقیقاً ۶۰ آی‌پی تمیز) به جست‌وجو ادامه می‌دهد؛ هر آی‌پی با <b>بازآزمون دقیق ۳ دوره</b> تأیید می‌شود. معیار تمیزی: کامل‌شدن handshake (خطا از جنس گواهی = لبه جواب داده)، نه timeouts و نه RST اپراتور. ✅ پرچم نتایج = <b>محل ثبت آی‌پی</b> (آی‌پی Anycast کلودفلر معمولاً آمریکا ثبت شده) — <b>خروجی واقعی اتصال</b>، نزدیک‌ترین دیتاسنتر کلودفلر به توست که در صفحهٔ کاربر و ریمارک کانفیگ نشان داده می‌شود.</div></div>
 <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0;font-size:12px">
@@ -11487,7 +11609,7 @@ const HTML_TEMPLATES = {
 /* ============================================================
    0. CONSTANTS & STATE
    ============================================================ */
-var CURRENT_VERSION = '1.0.2';
+var CURRENT_VERSION = '1.0.3';
 var UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 var TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
 var NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2082', '2086', '2095'];
@@ -12753,11 +12875,17 @@ function getvIeesLink(username) {
 				var portStr = entry.port;
 				var isTlsPort = entry.tls;
 				var tlsVal = isTlsPort ? 'tls' : 'none';
+				/* v1.0.3: فرگمنت/ماسک فقط روی TLS + مقدار تقویت‌شده (مطابق خروجی سرور) */
 				var userFrag = '';
-				if (user.frag_len && user.frag_int) userFrag += '&fragment=' + encodeURIComponent(user.frag_len + ',' + user.frag_int + (isTlsPort ? ',tlshello' : ''));
-				if (user.advanced_frag) userFrag += '&fm=' + encodeURIComponent(user.advanced_frag);
+				if (isTlsPort && user.frag_len && user.frag_int) {
+					var bpA = lmlFragBoostC(user.frag_len, user.frag_int);
+					userFrag += '&fragment=' + encodeURIComponent(bpA.len + ',' + bpA.int + ',tlshello');
+					userFrag += '&fm=' + encodeURIComponent(lmlFmForC(user.advanced_frag));
+				} else if (isTlsPort && user.advanced_frag) {
+					userFrag += '&fm=' + encodeURIComponent(lmlFmForC(user.advanced_frag));
+				}
 				if (isTlsPort && user.cipher_suites) userFrag += '&cs=' + encodeURIComponent(user.cipher_suites);
-				if (user.tls_mask) userFrag += '&mask=' + encodeURIComponent(user.tls_mask);
+				if (isTlsPort && user.tls_mask) userFrag += '&mask=' + encodeURIComponent(user.tls_mask);
 				var insecureFlag = (isTlsPort && entry.ip) ? '1' : '0';
 				var tlsParams = isTlsPort ? ('&insecure=' + insecureFlag + '&fp=' + fp + '&allowInsecure=' + insecureFlag + '&sni=' + host) : '';
 				var ipCcP = entry.ip ? ((State.ipCcMap || {})[entry.ip] || '') : '';
@@ -14427,9 +14555,32 @@ window.lmlAddGhRepoIps = lmlAddGhRepoIps;
 
 
 /* ---- موتورهای اتصال (پریست فرگمنت) ---- */
-/* GIANT-FM: ماسک چندلایهٔ موتور غول — خردکردن ClientHello در دو لایه + نویز روی UDP
+/* GIANT-FM v2 (نسخه 1.0.3): ماسک چندلایهٔ موتور غول — بزرگ‌تر و قوی‌تر از قبل:
+   لایهٔ ۱: خردکردن ClientHello با بازهٔ طول ۸-۱۲۰ و پخش زمانی ۵-۴۰
+   لایهٔ ۲: تقسیم دو پکت اول تا ۱۶ تکه · UDP: دو پکت نویز
    (برای PattNG/PattN و v2rayNG جدید از طریق پارامتر fm؛ بقیهٔ کلاینت‌ها نادیده می‌گیرند) */
-var GIANT_FM = '{"tcp": [{"type": "fragment", "settings": {"packets": "tlshello", "lengths": ["10", "80", "1"], "delays": ["5", "20"], "maxSplit": "0"}},{"type": "fragment", "settings": {"packets": "1-1", "lengths": ["114", "1"], "delays": ["1"], "maxSplit": "11"}}],"udp": [{"type": "noise", "settings": {"noise": [{"rand": "10-20", "delay": "10-16"}]}}]}';
+var GIANT_FM = '{"tcp": [{"type": "fragment", "settings": {"packets": "tlshello", "lengths": ["8", "120", "1"], "delays": ["5", "40"], "maxSplit": "0"}},{"type": "fragment", "settings": {"packets": "1-2", "lengths": ["90", "1"], "delays": ["2", "15"], "maxSplit": "16"}}],"udp": [{"type": "noise", "settings": {"noise": [{"rand": "10-30", "delay": "5-20"},{"rand": "20-60", "delay": "15-35"}]}}]}';
+var GIANT_FM_OLD = '{"tcp": [{"type": "fragment", "settings": {"packets": "tlshello", "lengths": ["10", "80", "1"], "delays": ["5", "20"], "maxSplit": "0"}},{"type": "fragment", "settings": {"packets": "1-1", "lengths": ["114", "1"], "delays": ["1"], "maxSplit": "11"}}],"udp": [{"type": "noise", "settings": {"noise": [{"rand": "10-20", "delay": "10-16"}]}}]}';
+function lmlNormFmC(s) { return String(s || '').replace(/\\s+/g, ''); }
+function lmlFmForC(fm) { var un = lmlNormFmC(fm); if (!un || un === lmlNormFmC(GIANT_FM_OLD)) return GIANT_FM; return String(fm); }
+function lmlBoostRangeC(str, loMul, hiMul, loCap, hiCap) {
+	var s = String(str || '').trim();
+	if (!s) return '';
+	var parts = s.split('-');
+	if (parts.length >= 2) {
+		var a = parseFloat(parts[0]), b = parseFloat(parts[1]);
+		if (!isFinite(a) || !isFinite(b) || a <= 0 || b <= 0) return s;
+		var lo = Math.max(loCap, Math.floor(Math.min(a, b) * loMul));
+		var hi = Math.min(hiCap, Math.max(lo + 1, Math.ceil(Math.max(a, b) * hiMul)));
+		return lo + '-' + hi;
+	}
+	var n = parseFloat(s);
+	if (!isFinite(n) || n <= 0) return s;
+	var lo2 = Math.max(loCap, Math.floor(n * loMul));
+	var hi2 = Math.min(hiCap, Math.max(lo2 + 1, Math.ceil(n * hiMul)));
+	return lo2 + '-' + hi2;
+}
+function lmlFragBoostC(len, int) { return { len: lmlBoostRangeC(len, 0.6, 1.5, 1, 1500), int: lmlBoostRangeC(int, 0.75, 2, 1, 100) }; }
 document.addEventListener('click', function (e) {
 	var t = e.target.closest ? e.target.closest('[data-eng]') : null;
 	if (!t) return;
@@ -14451,7 +14602,7 @@ document.addEventListener('click', function (e) {
 			toggleAdvancedSettingsInputs(true);
 			vset('fAdvancedFrag', GIANT_FM);
 		} catch (eG) { }
-		toast('🛡 موتور غول فعال شد — قوی‌تر از قبل: پکت‌های ریز با پخش زمانی گسترده + ماسک چندلایه و نویز؛ حداکثر محافظت از اتصال در شرایط پرفشار و فیلترینگ سنگین.', 'ok', 12000);
+		toast('🛡 موتور غول فعال شد — بزرگ‌تر و قوی‌تر از قبل: بازهٔ خردکردن گسترده‌تر، پخش زمانی بلندتر، ماسک دولایه + نویز دوتایی UDP؛ حداکثر محافظت از اتصال در فیلترینگ سنگین.', 'ok', 12000);
 	} else {
 		vset('fFragLen', '100-300'); vset('fFragInt', '8-12');
 		if (tg && !tg.checked) tg.click();
@@ -17978,6 +18129,29 @@ ${COMMON_TOAST_HTML}
 			var m = { '443': '80', '2053': '2052', '2083': '2082', '2087': '2086', '2096': '2095', '8443': '8080' };
 			return m[String(p)] || '80';
 		}
+		/* v1.0.3: توابع فرگمنت قوی‌تر — دقیقاً مطابق منطق سمت سرور */
+		var LML_FM_V2S = '{"tcp": [{"type": "fragment", "settings": {"packets": "tlshello", "lengths": ["8", "120", "1"], "delays": ["5", "40"], "maxSplit": "0"}},{"type": "fragment", "settings": {"packets": "1-2", "lengths": ["90", "1"], "delays": ["2", "15"], "maxSplit": "16"}}],"udp": [{"type": "noise", "settings": {"noise": [{"rand": "10-30", "delay": "5-20"},{"rand": "20-60", "delay": "15-35"}]}}]}';
+		var LML_FM_V1S = '{"tcp": [{"type": "fragment", "settings": {"packets": "tlshello", "lengths": ["10", "80", "1"], "delays": ["5", "20"], "maxSplit": "0"}},{"type": "fragment", "settings": {"packets": "1-1", "lengths": ["114", "1"], "delays": ["1"], "maxSplit": "11"}}],"udp": [{"type": "noise", "settings": {"noise": [{"rand": "10-20", "delay": "10-16"}]}}]}';
+		function lmlNormFmC(s) { return String(s || '').replace(/\\s+/g, ''); }
+		function lmlFmForC(fm) { var un = lmlNormFmC(fm); if (!un || un === lmlNormFmC(LML_FM_V1S)) return LML_FM_V2S; return String(fm); }
+		function lmlBoostRangeC(str, loMul, hiMul, loCap, hiCap) {
+			var s = String(str || '').trim();
+			if (!s) return '';
+			var parts = s.split('-');
+			if (parts.length >= 2) {
+				var a = parseFloat(parts[0]), b = parseFloat(parts[1]);
+				if (!isFinite(a) || !isFinite(b) || a <= 0 || b <= 0) return s;
+				var lo = Math.max(loCap, Math.floor(Math.min(a, b) * loMul));
+				var hi = Math.min(hiCap, Math.max(lo + 1, Math.ceil(Math.max(a, b) * hiMul)));
+				return lo + '-' + hi;
+			}
+			var n = parseFloat(s);
+			if (!isFinite(n) || n <= 0) return s;
+			var lo2 = Math.max(loCap, Math.floor(n * loMul));
+			var hi2 = Math.min(hiCap, Math.max(lo2 + 1, Math.ceil(n * hiMul)));
+			return lo2 + '-' + hi2;
+		}
+		function lmlFragBoostC(len, int) { return { len: lmlBoostRangeC(len, 0.6, 1.5, 1, 1500), int: lmlBoostRangeC(int, 0.75, 2, 1, 100) }; }
 		function getvIeesLink() {
 			const u = window.statusUser;
 			if (!u) return '';
@@ -18072,12 +18246,20 @@ ${COMMON_TOAST_HTML}
 						const isChainedSt = String(proxy.currentDynPath).indexOf("loc-") >= 0;
 						const chainFlagSt = (isChainedSt && proxy.flagEmoji && proxy.flagEmoji !== "🌐") ? (proxy.flagEmoji + " ") : "";
 						const ipPartSt = entry.ip ? (entry.ip + " ") : "";
-						const exitFlagSt = (isChainedSt && chainFlagSt) ? chainFlagSt : "🌐 "; /* بدون پرچم دیتاسنتر در نام لینک */
+						/* v1.0.3: بازگشت پرچم — زنجیره‌ای = کشور پروکسی، مستقیم = دیتاسنتر نزدیک به کاربر (خروجی واقعی) */
+						const coloFlagSt = u.colo_flag ? (u.colo_flag + " ") : "";
+						const exitFlagSt = isChainedSt ? (chainFlagSt || "🌐 ") : (coloFlagSt || "🌐 ");
+						/* v1.0.3: فرگمنت/ماسک فقط روی TLS + مقدار تقویت‌شده (مطابق سرور) */
 						let userFrag = "";
-						if (u.frag_len && u.frag_int) userFrag += "&fragment=" + encodeURIComponent(u.frag_len + "," + u.frag_int + (isTlsPort ? ",tlshello" : ""));
-						if (u.advanced_frag) userFrag += "&fm=" + encodeURIComponent(u.advanced_frag);
+						if (isTlsPort && u.frag_len && u.frag_int) {
+							const bpSt = lmlFragBoostC(u.frag_len, u.frag_int);
+							userFrag += "&fragment=" + encodeURIComponent(bpSt.len + "," + bpSt.int + ",tlshello");
+							userFrag += "&fm=" + encodeURIComponent(lmlFmForC(u.advanced_frag));
+						} else if (isTlsPort && u.advanced_frag) {
+							userFrag += "&fm=" + encodeURIComponent(lmlFmForC(u.advanced_frag));
+						}
 						if (isTlsPort && u.cipher_suites) userFrag += "&cs=" + encodeURIComponent(u.cipher_suites);
-						if (u.tls_mask) userFrag += "&mask=" + encodeURIComponent(u.tls_mask);
+						if (isTlsPort && u.tls_mask) userFrag += "&mask=" + encodeURIComponent(u.tls_mask);
 						
 						const insecureFlag = (isTlsPort && entry.ip) ? "1" : "0";
 						const tlsParams = isTlsPort ? ("&insecure=" + insecureFlag + "&fp=" + fp + "&allowInsecure=" + insecureFlag + "&sni=" + host) : "";
