@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LML PANEL — توضیح گرافیکی</title>
+<style>
+:root{
+  --bg:#070b17; --bg2:#0d1428; --card:#111a33; --card2:#16213f; --line:#24335c;
+  --txt:#e8edff; --mut:#8fa0cc; --c1:#6c8cff; --c2:#22d3ee; --c3:#a78bfa; --c4:#34d399; --c5:#fbbf24; --c6:#fb7185; --c7:#f97316;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:radial-gradient(1200px 600px at 80% -10%,#1b2a6b55,transparent),radial-gradient(900px 500px at 0% 20%,#0e7c8f33,transparent),var(--bg);
+  color:var(--txt);font-family:Vazirmatn,"Vazir",Tahoma,"Segoe UI",system-ui,sans-serif;line-height:1.9;overflow-x:hidden}
+.wrap{max-width:1100px;margin:0 auto;padding:0 20px}
+/* HERO */
+.hero{padding:70px 20px 40px;text-align:center;position:relative}
+.badge{display:inline-flex;gap:8px;align-items:center;background:#6c8cff22;border:1px solid #6c8cff66;color:#b9c8ff;padding:4px 16px;border-radius:99px;font-size:13px}
+.hero h1{font-size:clamp(38px,7vw,74px);font-weight:900;margin:18px 0 6px;letter-spacing:1px;
+  background:linear-gradient(90deg,#6c8cff,#22d3ee,#a78bfa);-webkit-background-clip:text;background-clip:text;color:transparent;direction:ltr}
+.hero p.sub{color:var(--mut);font-size:clamp(15px,2.2vw,19px);max-width:760px;margin:0 auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin:38px 0 0}
+.stat{background:linear-gradient(160deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:18px;padding:18px 10px}
+.stat b{display:block;font-size:34px;font-weight:900;direction:ltr}
+.stat span{color:var(--mut);font-size:13px}
+.stat:nth-child(1) b{color:var(--c1)}.stat:nth-child(2) b{color:var(--c2)}.stat:nth-child(3) b{color:var(--c4)}.stat:nth-child(4) b{color:var(--c5)}.stat:nth-child(5) b{color:var(--c6)}
+/* SECTION */
+section{padding:46px 0}
+.h{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.h i{font-style:normal;display:grid;place-items:center;width:42px;height:42px;border-radius:12px;font-weight:900;color:#06101f;background:linear-gradient(135deg,var(--c1),var(--c2))}
+.h h2{font-size:clamp(22px,3.4vw,30px);font-weight:800}
+.lead{color:var(--mut);margin-bottom:24px;max-width:820px}
+.card{background:linear-gradient(160deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:20px;padding:22px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+.ic{font-size:30px;margin-bottom:6px}
+.card h3{font-size:17px;margin-bottom:4px}
+.card p,.card li{color:var(--mut);font-size:14px}
+.card ul{padding-right:18px}
+.tag{display:inline-block;font-size:11px;padding:1px 9px;border-radius:99px;border:1px solid;margin:2px 0 2px 4px;direction:ltr}
+.t1{color:var(--c1);border-color:#6c8cff77}.t2{color:var(--c2);border-color:#22d3ee77}.t3{color:var(--c3);border-color:#a78bfa77}
+.t4{color:var(--c4);border-color:#34d39977}.t5{color:var(--c5);border-color:#fbbf2477}.t6{color:var(--c6);border-color:#fb718577}
+/* diagram */
+.diagram{padding:10px;overflow-x:auto}
+.diagram svg{width:100%;min-width:760px;height:auto;display:block}
+.diagram text{font-family:Vazirmatn,Tahoma,"Segoe UI",sans-serif}
+/* flow */
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;counter-reset:s;position:relative}
+.step{position:relative;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:34px 14px 16px;text-align:center}
+.step:before{counter-increment:s;content:counter(s);position:absolute;top:-16px;right:50%;transform:translateX(50%);width:34px;height:34px;border-radius:50%;
+  display:grid;place-items:center;font-weight:900;color:#06101f;background:linear-gradient(135deg,var(--c2),var(--c4));box-shadow:0 0 0 5px var(--bg)}
+.step b{display:block;font-size:15px;margin-bottom:2px}
+.step span{font-size:12.5px;color:var(--mut)}
+/* tabs map */
+.tabs3{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.pane{border-radius:20px;border:1px solid var(--line);overflow:hidden;background:var(--card)}
+.pane header{padding:12px 18px;font-weight:800;display:flex;gap:8px;align-items:center}
+.pane .chips{padding:14px 16px 18px;display:flex;flex-wrap:wrap;gap:8px}
+.chip{background:#ffffff0d;border:1px solid #ffffff1a;border-radius:10px;padding:5px 12px;font-size:13px}
+.p1 header{background:linear-gradient(90deg,#6c8cff44,transparent)}
+.p2 header{background:linear-gradient(90deg,#fbbf2444,transparent)}
+.p3 header{background:linear-gradient(90deg,#34d39944,transparent)}
+/* roles */
+.roles{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+.role{text-align:center;border-radius:20px;padding:22px;border:1px solid var(--line);background:var(--card)}
+.role .av{width:64px;height:64px;border-radius:50%;margin:0 auto 8px;display:grid;place-items:center;font-size:30px}
+/* route table */
+.routes{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px}
+.route{display:flex;gap:10px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 12px;font-size:13px}
+.route code{direction:ltr;font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--c2);font-size:12.5px}
+.route span{color:var(--mut);margin-right:auto}
+/* timeline */
+.tl{border-right:2px dashed var(--line);padding-right:22px;margin-right:8px}
+.tl div{position:relative;margin-bottom:14px;font-size:14px}
+.tl div:before{content:"";position:absolute;right:-32px;top:9px;width:14px;height:14px;border-radius:50%;background:var(--c4);box-shadow:0 0 0 4px var(--bg)}
+.tl b{color:var(--txt)}.tl span{color:var(--mut)}
+/* flags */
+.flags{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;font-size:34px}
+.flags span{filter:drop-shadow(0 4px 8px #0008)}
+/* warn */
+.warn{border:1px solid #fb718566;background:linear-gradient(160deg,#3a1220,#1b0f1e)}
+.warn h3{color:#ffb3c0}
+footer{text-align:center;color:var(--mut);padding:40px 0 60px;font-size:13px;border-top:1px solid var(--line);margin-top:30px}
+@keyframes dash{to{stroke-dashoffset:-24}}
+.flowline{stroke-dasharray:8 6;animation:dash 1.2s linear infinite}
+@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+.pulse{animation:pulse 2.4s ease-in-out infinite}
+</style>
+</head>
+<body>
+
+<!-- ============ HERO ============ -->
+<div class="wrap hero">
+  <span class="badge">🛰️ پنل مدیریت روی Cloudflare Workers &nbsp;•&nbsp; نسخه 1.0.6</span>
+  <h1>LML PANEL</h1>
+  <p class="sub">یک پنل مدیریت کاربر و اشتراک که <b>کامل داخل یک فایل <code style="direction:ltr;display:inline-block">worker.js</code></b> روی Cloudflare اجرا می‌شود. تونل VLESS روی WebSocket می‌سازد، اشتراک می‌دهد و کاربران را مدیریت می‌کند. سرور شخصی لازم ندارد.</p>
+  <div class="stats">
+    <div class="stat"><b>1</b><span>فایل واحد (حدود ۱.۱ مگابایت)</span></div>
+    <div class="stat"><b>~21k</b><span>خط کد جاوااسکریپت</span></div>
+    <div class="stat"><b>60+</b><span>مسیر API</span></div>
+    <div class="stat"><b>23</b><span>کشور با آی‌پی ثابت</span></div>
+    <div class="stat"><b>2</b><span>نقش: ادمین و کاربر</span></div>
+  </div>
+</div>
+
+<!-- ============ 1. WHAT ============ -->
+<section><div class="wrap">
+  <div class="h"><i>۱</i><h2>این پروژه چیست؟</h2></div>
+  <p class="lead">LML-PANEL یک Worker برای Cloudflare است. ادمین از پنل وب کاربر می‌سازد (با حجم و تاریخ انقضا). کاربر لینک اشتراک می‌گیرد و آن را در اپ‌هایی مثل v2rayNG، Hiddify یا sing-box وارد می‌کند. ترافیک او از لبهٔ Cloudflare عبور می‌کند.</p>
+  <div class="grid g4">
+    <div class="card"><div class="ic">☁️</div><h3>Serverless</h3><p>روی Workers اجرا می‌شود. بدون VPS و بدون سرویس‌دهی جداگانه.</p></div>
+    <div class="card"><div class="ic">🗄️</div><h3>دیتابیس D1</h3><p>کاربران و تنظیمات در Cloudflare D1 با بایندینگ <code style="direction:ltr;display:inline-block">DB</code> ذخیره می‌شوند.</p></div>
+    <div class="card"><div class="ic">🔌</div><h3>VLESS روی WebSocket</h3><p>تونل اصلی از <code style="direction:ltr;display:inline-block">cloudflare:sockets</code> استفاده می‌کند. پروتکل Trojan از نسخهٔ 1.0.5 حذف شده است.</p></div>
+    <div class="card"><div class="ic">🤖</div><h3>ربات تلگرام</h3><p>پنل یک وب‌هوک تلگرام دارد و بکاپ روزانه به ادمین می‌فرستد.</p></div>
+  </div>
+</div></section>
+
+<!-- ============ 2. ARCHITECTURE ============ -->
+<section><div class="wrap">
+  <div class="h"><i>۲</i><h2>معماری کلی</h2></div>
+  <p class="lead">خطوط متحرک مسیر ترافیک را نشان می‌دهند. خطوط ثابت ارتباط‌های مدیریتی و داده هستند.</p>
+  <div class="card diagram">
+  <svg viewBox="0 0 1040 560" xmlns="http://www.w3.org/2000/svg" direction="ltr">
+    <defs>
+      <linearGradient id="gA" x1="0" x2="1"><stop offset="0" stop-color="#6c8cff"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
+      <linearGradient id="gB" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#f97316"/><stop offset="1" stop-color="#fbbf24"/></linearGradient>
+      <filter id="glow"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      <marker id="ar" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,1 L11,6 L0,11 z" fill="#22d3ee"/></marker>
+      <marker id="ar2" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,1 L11,6 L0,11 z" fill="#8fa0cc"/></marker>
+    </defs>
+
+    <!-- Users -->
+    <g>
+      <rect x="20" y="40" width="200" height="130" rx="18" fill="#16213f" stroke="#6c8cff"/>
+      <text x="120" y="75" font-size="28" text-anchor="middle">📱 💻</text>
+      <text x="120" y="108" font-size="16" font-weight="800" fill="#e8edff" text-anchor="middle">کاربر نهایی</text>
+      <text x="120" y="132" font-size="12" fill="#8fa0cc" text-anchor="middle">v2rayNG • Hiddify • sing-box</text>
+      <text x="120" y="152" font-size="12" fill="#8fa0cc" text-anchor="middle">Clash • Streisand</text>
+    </g>
+    <g>
+      <rect x="20" y="230" width="200" height="110" rx="18" fill="#16213f" stroke="#fbbf24"/>
+      <text x="120" y="268" font-size="28" text-anchor="middle">🧑‍💼</text>
+      <text x="120" y="298" font-size="16" font-weight="800" fill="#e8edff" text-anchor="middle">ادمین</text>
+      <text x="120" y="320" font-size="12" fill="#8fa0cc" text-anchor="middle">/panel • /login</text>
+    </g>
+    <g>
+      <rect x="20" y="400" width="200" height="110" rx="18" fill="#16213f" stroke="#a78bfa"/>
+      <text x="120" y="438" font-size="28" text-anchor="middle">✈️</text>
+      <text x="120" y="468" font-size="16" font-weight="800" fill="#e8edff" text-anchor="middle">تلگرام</text>
+      <text x="120" y="490" font-size="12" fill="#8fa0cc" text-anchor="middle">ربات + بکاپ خودکار</text>
+    </g>
+
+    <!-- Worker core -->
+    <g filter="url(#glow)">
+      <rect x="360" y="60" width="330" height="440" rx="26" fill="#0f1a3a" stroke="url(#gA)" stroke-width="2.5"/>
+    </g>
+    <rect x="360" y="60" width="330" height="56" rx="26" fill="url(#gB)" opacity=".95"/>
+    <rect x="360" y="90" width="330" height="26" fill="url(#gB)" opacity=".95"/>
+    <text x="525" y="96" font-size="19" font-weight="900" fill="#1a0f00" text-anchor="middle">⚡ Cloudflare Worker  (worker.js)</text>
+
+    <g font-size="13" text-anchor="middle">
+      <rect x="385" y="135" width="130" height="62" rx="12" fill="#16213f" stroke="#6c8cff"/><text x="450" y="160" fill="#e8edff" font-weight="800">🧭 Router</text><text x="450" y="180" fill="#8fa0cc" font-size="11">/panel /sub /api /status</text>
+      <rect x="535" y="135" width="130" height="62" rx="12" fill="#16213f" stroke="#22d3ee"/><text x="600" y="160" fill="#e8edff" font-weight="800">🛡️ Anti-Ban</text><text x="600" y="180" fill="#8fa0cc" font-size="11">Probe + Tarpit</text>
+
+      <rect x="385" y="212" width="130" height="62" rx="12" fill="#16213f" stroke="#34d399"/><text x="450" y="237" fill="#e8edff" font-weight="800">🔑 Auth و Session</text><text x="450" y="257" fill="#8fa0cc" font-size="11">Login • Rate-limit</text>
+      <rect x="535" y="212" width="130" height="62" rx="12" fill="#16213f" stroke="#a78bfa"/><text x="600" y="237" fill="#e8edff" font-weight="800">📡 Subscription</text><text x="600" y="257" fill="#8fa0cc" font-size="11">sub • singbox • v2json</text>
+
+      <rect x="385" y="289" width="280" height="76" rx="12" fill="#1a2750" stroke="url(#gA)" stroke-width="2"/>
+      <text x="525" y="316" fill="#e8edff" font-weight="900" font-size="15">🔌 VLESS-over-WebSocket Engine</text>
+      <text x="525" y="338" fill="#8fa0cc" font-size="11.5">احراز UUID • حجم‌شمار • قطع فوری سوکت‌ها</text>
+      <text x="525" y="355" fill="#8fa0cc" font-size="11.5">اتصال خروجی با cloudflare:sockets</text>
+
+      <rect x="385" y="380" width="130" height="52" rx="12" fill="#16213f" stroke="#fbbf24"/><text x="450" y="403" fill="#e8edff" font-weight="800">⏰ Cron</text><text x="450" y="421" fill="#8fa0cc" font-size="11">ریست • چرخش • بکاپ</text>
+      <rect x="535" y="380" width="130" height="52" rx="12" fill="#16213f" stroke="#fb7185"/><text x="600" y="403" fill="#e8edff" font-weight="800">🔍 Scanner</text><text x="600" y="421" fill="#8fa0cc" font-size="11">IP تمیز • ECH • Ping</text>
+
+      <rect x="385" y="446" width="280" height="42" rx="12" fill="#16213f" stroke="#22d3ee" stroke-dasharray="4 3"/><text x="525" y="472" fill="#e8edff" font-weight="700">📲 صفحهٔ وضعیت کاربر (PWA)</text>
+    </g>
+
+    <!-- Right side -->
+    <g>
+      <rect x="830" y="40" width="190" height="110" rx="18" fill="#16213f" stroke="#34d399"/>
+      <text x="925" y="78" font-size="28" text-anchor="middle">🗄️</text>
+      <text x="925" y="106" font-size="16" font-weight="800" fill="#e8edff" text-anchor="middle">Cloudflare D1</text>
+      <text x="925" y="128" font-size="12" fill="#8fa0cc" text-anchor="middle">users • settings</text>
+    </g>
+    <g>
+      <rect x="830" y="190" width="190" height="110" rx="18" fill="#16213f" stroke="#22d3ee"/>
+      <text x="925" y="228" font-size="28" text-anchor="middle">🌍</text>
+      <text x="925" y="256" font-size="16" font-weight="800" fill="#e8edff" text-anchor="middle">اینترنت آزاد</text>
+      <text x="925" y="278" font-size="12" fill="#8fa0cc" text-anchor="middle">مقصد نهایی ترافیک کاربر</text>
+    </g>
+    <g>
+      <rect x="830" y="340" width="190" height="80" rx="18" fill="#16213f" stroke="#f97316"/>
+      <text x="925" y="372" font-size="16" font-weight="800" fill="#e8edff" text-anchor="middle">🌐 نودهای مرکزی ۲۳ کشور</text>
+      <text x="925" y="396" font-size="12" fill="#8fa0cc" text-anchor="middle">لیست آی‌پی زنده</text>
+    </g>
+    
+
+    <!-- Lines: traffic (animated) -->
+    <path class="flowline" d="M220 105 C 290 105, 290 160, 360 160" stroke="#22d3ee" stroke-width="3" fill="none" marker-end="url(#ar)"/>
+    <text x="290" y="92" font-size="11" fill="#22d3ee" text-anchor="middle">WS + TLS</text>
+    <path class="flowline" d="M690 330 C 760 330, 760 245, 830 245" stroke="#22d3ee" stroke-width="3" fill="none" marker-end="url(#ar)"/>
+    <text x="760" y="300" font-size="11" fill="#22d3ee" text-anchor="middle">TCP</text>
+    <!-- management lines -->
+    <path d="M220 285 C 290 285, 290 245, 360 245" stroke="#fbbf24" stroke-width="2.2" fill="none" marker-end="url(#ar2)"/>
+    <path d="M220 455 C 290 455, 290 400, 360 400" stroke="#a78bfa" stroke-width="2.2" fill="none" marker-end="url(#ar2)"/>
+    <path d="M690 160 C 760 160, 760 95, 830 95" stroke="#34d399" stroke-width="2.2" fill="none" marker-end="url(#ar2)"/>
+    <path d="M690 400 C 760 400, 760 380, 830 380" stroke="#f97316" stroke-width="2.2" fill="none" marker-end="url(#ar2)"/>
+        <text x="95" y="20" font-size="12" fill="#8fa0cc" text-anchor="middle">مشتری‌ها</text>
+    <text x="525" y="30" font-size="12" fill="#8fa0cc" text-anchor="middle">لبهٔ Cloudflare</text>
+    <text x="925" y="20" font-size="12" fill="#8fa0cc" text-anchor="middle">سرویس‌ها و مقصد</text>
+  </svg>
+  </div>
+</div></section>
+
+<!-- ============ 3. FLOW ============ -->
+<section><div class="wrap">
+  <div class="h"><i>۳</i><h2>مسیر یک کاربر از صفر تا اتصال</h2></div>
+  <p class="lead">از ساخت کاربر تا برقراری تونل، به ترتیب:</p>
+  <div class="flow" style="margin-top:28px">
+    <div class="step"><b>👤 ساخت کاربر</b><span>ادمین حجم، تاریخ انقضا و محدودیت آی‌پی را تعیین می‌کند.</span></div>
+    <div class="step"><b>🗄️ ثبت در D1</b><span>UUID و تنظیمات کاربر در جدول <code style="direction:ltr;display:inline-block">users</code> ذخیره می‌شود.</span></div>
+    <div class="step"><b>🔗 لینک اشتراک</b><span>مسیرهای <code style="direction:ltr;display:inline-block">/sub</code> و <code style="direction:ltr;display:inline-block">/singbox</code> و <code style="direction:ltr;display:inline-block">/v2json</code> کانفیگ را می‌سازند.</span></div>
+    <div class="step"><b>📲 ورود به اپ</b><span>کاربر لینک را در اپ کلاینت وارد می‌کند و کانفیگ‌ها به‌روز می‌شوند.</span></div>
+    <div class="step"><b>🔌 اتصال WS</b><span>اپ به Worker وصل می‌شود. هدر VLESS و UUID بررسی می‌شود.</span></div>
+    <div class="step"><b>📊 شمارش حجم</b><span>مصرف در حافظه جمع می‌شود و هر ۲۰ ثانیه در دیتابیس ذخیره می‌شود.</span></div>
+    <div class="step"><b>🛑 قطع فوری</b><span>با غیرفعال یا حذف کاربر، تمام سوکت‌های فعال او بلافاصله بسته می‌شوند.</span></div>
+  </div>
+</div></section>
+
+<!-- ============ 4. PANEL MAP ============ -->
+<section><div class="wrap">
+  <div class="h"><i>۴</i><h2>نقشهٔ بخش‌های پنل</h2></div>
+  <p class="lead">پنل دو گروه تب اصلی دارد (نام تب‌ها از کد استخراج شده است).</p>
+  <div class="tabs3">
+    <div class="pane p1"><header>👥 سرویس‌ها</header><div class="chips">
+      <span class="chip">کانفیگ‌ها</span><span class="chip">اشتراک</span><span class="chip">کاربران آنلاین</span><span class="chip">آی‌پی‌ها</span><span class="chip">ترافیک</span></div></div>
+    
+    <div class="pane p3"><header>⚙️ سیستم</header><div class="chips">
+      <span class="chip">وضعیت ورکر</span><span class="chip">دیتابیس</span><span class="chip">لاگ‌ها</span><span class="chip">بکاپ و ریستور</span><span class="chip">نگهداری</span><span class="chip">حساب</span><span class="chip">شبکه</span></div></div>
+  </div>
+</div></section>
+
+<!-- ============ 5. ROLES ============ -->
+<section><div class="wrap">
+  <div class="h"><i>۵</i><h2>نقش‌ها و دسترسی‌ها</h2></div>
+  <div class="roles" style="margin-top:18px">
+    <div class="role" style="border-color:#fbbf2477"><div class="av" style="background:#fbbf2422">👑</div><h3>ادمین</h3><p style="color:var(--mut);font-size:14px">کنترل کامل: کاربران، دیتابیس، بکاپ، تنظیمات شبکه و ربات تلگرام.</p></div>
+    <div class="role" style="border-color:#6c8cff77"><div class="av" style="background:#6c8cff22">📱</div><h3>کاربر</h3><p style="color:var(--mut);font-size:14px">صفحهٔ شخصی <code style="direction:ltr;display:inline-block">/status/…</code> با وضعیت حجم و انقضا، کانفیگ‌ها و QR.</p></div>
+  </div>
+</div></section>
+
+<!-- ============ 6. TECH ============ -->
+<section><div class="wrap">
+  <div class="h"><i>۶</i><h2>تکنیک‌های پایداری و عبور از فیلترینگ</h2></div>
+  <p class="lead">مجموعه‌ای از ابزارهای خودکار برای پیدا کردن مسیر سالم و کم‌ریسک‌تر کردن اتصال.</p>
+  <div class="grid g3" style="grid-template-columns:repeat(3,1fr)">
+    <div class="card"><div class="ic">🔐</div><h3>ECH <span class="tag t2">Encrypted Client Hello</span></h3><p>چند DoH Resolver تست می‌شوند، بهترین مقدار ECH انتخاب و در کانفیگ قرار می‌گیرد.</p></div>
+    <div class="card"><div class="ic">🧩</div><h3>Fragment و Noise</h3><p>پروفایل‌های آمادهٔ سبک و سنگین و خاموش برای تکه‌تکه کردن TLS و نویز UDP.</p></div>
+    <div class="card"><div class="ic">✨</div><h3>آی‌پی تمیز</h3><p>اسکن رنج‌های Cloudflare، تست TLS واقعی، تشخیص کشور و رتبه‌بندی با گزارش جمعی کاربران.</p></div>
+    <div class="card"><div class="ic">🌍</div><h3>آی‌پی ثابت ۲۳ کشور</h3><p>با به‌روزرسانی خودکار از سرور مرکزی و خروجی یکپارچه.</p></div>
+    <div class="card"><div class="ic">♻️</div><h3>ProxyIP سراسری</h3><p>هر ۱۲ ساعت لیست تازه و بهترین‌ها خودکار انتخاب می‌شوند.</p></div>
+    <div class="card"><div class="ic">⚙️</div><h3>بهینه‌سازی تونل</h3><p>دسته‌بندی دادهٔ آپ‌استریم، Backpressure، کش DNS و DoH.</p></div>
+  </div>
+  <div class="card" style="margin-top:18px">
+    <h3 style="text-align:center;margin-bottom:10px">🌍 کشورهای پوشش‌داده‌شده (از لیست آی‌پی پروژه)</h3>
+    <div class="flags"><span>🇨🇭</span><span>🇹🇷</span><span>🇩🇪</span><span>🇫🇷</span><span>🇳🇱</span><span>🇱🇻</span><span>🇪🇸</span><span>🇫🇮</span><span>🇬🇧</span><span>🇦🇱</span><span>🇸🇪</span><span>🇪🇬</span><span>🇸🇾</span><span>🇹🇯</span><span>🇷🇺</span><span>🇨🇦</span><span>🇦🇪</span><span>🇸🇦</span><span>🇸🇬</span><span>🇭🇰</span><span>🇮🇩</span><span>🇯🇵</span></div>
+  </div>
+</div></section>
+
+<!-- ============ 7. PROTECTION ============ -->
+<section><div class="wrap">
+  <div class="h"><i>۷</i><h2>حفاظت و پایداری</h2></div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card"><h3>🛡️ Anti-Ban و Tarpit</h3>
+      <ul><li>اسکنرها (zgrab، shodan، masscan، curl و …) شناسایی می‌شوند و پاسخ کند و بی‌فایده می‌گیرند.</li>
+      <li>مسیرهای حساس مثل <code style="direction:ltr;display:inline-block">.env</code> و <code style="direction:ltr;display:inline-block">wp-admin</code> قبل از دسترسی به دیتابیس رد می‌شوند.</li>
+      <li>ورود به پنل با محدودیت تعداد تلاش (Rate-limit) محافظت می‌شود.</li></ul></div>
+    <div class="card"><h3>♻️ کارهای خودکار (Cron)</h3>
+      <ul><li>ریست دوره‌ای حجم کاربران.</li>
+      <li>چرخش خودکار پراکسی‌های خراب.</li>
+      <li>بکاپ JSON روزانه به تلگرام ادمین (اطلاعات کاربران).</li>
+      <li>تازه‌سازی ProxyIP سراسری.</li></ul></div>
+    <div class="card"><h3>⚡ کش و عملکرد</h3>
+      <ul><li>کش کوتاه‌مدت پرس‌وجوهای D1 (حدود ۲.۵ ثانیه).</li>
+      <li>بارگذاری کاربران به‌صورت SSR برای ورود سریع.</li>
+      <li>PWA با Service Worker و آیکن برای نصب روی موبایل.</li></ul></div>
+    
+  </div>
+</div></section>
+
+<!-- ============ 8. ROUTES ============ -->
+<section><div class="wrap">
+  <div class="h"><i>۸</i><h2>مسیرهای اصلی (Routes)</h2></div>
+  <p class="lead">بخشی از مسیرهای کلیدی در Router (جمعاً بیش از ۶۰ مسیر API).</p>
+  <div class="routes">
+    <div class="route"><code>/panel</code><span>پنل ادمین</span></div>
+    <div class="route"><code>/status/:id</code><span>صفحهٔ کاربر</span></div>
+    <div class="route"><code>/sub/:id</code><span>اشتراک استاندارد</span></div>
+    <div class="route"><code>/singbox/:id</code><span>کانفیگ sing-box</span></div>
+    <div class="route"><code>/v2json/:id</code><span>خروجی JSON</span></div>
+    <div class="route"><code>/api/backup</code><span>بکاپ</span></div>
+    <div class="route"><code>/api/restore</code><span>ریستور</span></div>
+    <div class="route"><code>/api/scan-ips</code><span>اسکن آی‌پی</span></div>
+    <div class="route"><code>/api/ech</code><span>مدیریت ECH</span></div>
+    <div class="route"><code>/api/analytics</code><span>آمار</span></div>
+    <div class="route"><code>/api/telegram-webhook</code><span>ربات</span></div>
+    <div class="route"><code>/lml-scanner/release</code><span>نسخه</span></div>
+  </div>
+</div></section>
+
+<!-- ============ 9. CHANGELOG ============ -->
+<section><div class="wrap">
+  <div class="h"><i>۹</i><h2>تازه‌های نسخه 1.0.6</h2></div>
+  <div class="card" style="margin-top:14px"><div class="tl">
+    <div><b>🚀 بارگذاری آنی کاربران:</b> <span>مشکل «در حال اتصال» هنگام ورود به پنل با SSR برطرف شد.</span></div>
+    <div><b>🛑 قطع ۱۰۰٪ فوری:</b> <span>با غیرفعال یا حذف کاربر، اشتراک، وب‌سوکت و سرور مرکزی همه قطع می‌شوند.</span></div>
+    <div><b>🌍 آی‌پی ثابت ۲۳ کشور:</b> <span>با بروزرسانی خودکار از سرور مرکزی.</span></div>
+    <div><b>🧹 پاکسازی:</b> <span>Socks5، ProxyIP دستی و ثبت دستی آی‌پی حذف شد و فرم کاربر ساده‌تر شد.</span></div>
+    <div><b>🔕 بهینه‌ساز خودکار خاموش:</b> <span>هنگام انتخاب آی‌پی کشور برای اتصال مستقیم و پایدار.</span></div>
+  </div></div>
+</div></section>
+
+<footer>تحلیل گرافیکی پروژه <b style="direction:ltr;display:inline-block">LML PANEL</b> • نسخه 1.0.6</footer>
+</body>
+</html>
