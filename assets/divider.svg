@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="26" viewBox="0 0 1200 26"><style>
+.pt{animation:fl 8s linear infinite}@keyframes fl{0%{transform:translateY(0);opacity:0}15%{opacity:.9}100%{transform:translateY(-300px);opacity:0}}
+.sweep{animation:sw 7s ease-in-out infinite}@keyframes sw{0%,50%{transform:translateX(0) skewX(-20deg)}100%{transform:translateX(1900px) skewX(-20deg)}}
+.wv{animation:wv 9s ease-in-out infinite alternate}.w1{animation-duration:12s}.w2{animation-duration:15s}@keyframes wv{to{transform:translateX(-140px)}}
+.spin{transform-box:fill-box;transform-origin:center;animation:sp 8s linear infinite}.rev{animation-direction:reverse}@keyframes sp{to{transform:rotate(360deg)}}
+.beat{transform-box:fill-box;transform-origin:center;animation:bt 2.4s ease-in-out infinite}@keyframes bt{50%{transform:scale(1.1)}}
+.glow{animation:gw 3s ease-in-out infinite}@keyframes gw{50%{opacity:.45}}
+.dash{stroke-dasharray:8 10;animation:dsh 1.2s linear infinite}@keyframes dsh{to{stroke-dashoffset:-36}}
+.pls{transform-box:fill-box;transform-origin:center;animation:pls 2.6s ease-out infinite}@keyframes pls{0%{transform:scale(.6);opacity:.9}100%{transform:scale(2.4);opacity:0}}
+.flt{animation:flt 6s ease-in-out infinite}@keyframes flt{50%{transform:translateY(-6px)}}
+.mv{animation:mv 6s ease-in-out infinite alternate}@keyframes mv{from{transform:translateX(140px)}to{transform:translateX(1060px)}}
+.bd{stroke-dasharray:60 340;animation:bd 5s linear infinite}@keyframes bd{to{stroke-dashoffset:-400}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style><defs><linearGradient id="dl" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#22d3ee" stop-opacity="0"/><stop offset=".3" stop-color="#22d3ee"/><stop offset=".5" stop-color="#ffc53d"/><stop offset=".7" stop-color="#8b5cf6"/><stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/></linearGradient></defs><rect x="0" y="12" width="1200" height="2" rx="1" fill="url(#dl)"/><g class="mv"><g transform="translate(-9 1)"><path d="M13 2 4 14h6l-1 8 9-12h-6z" fill="#ffc53d"/></g></g></svg>
