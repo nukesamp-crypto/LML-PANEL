@@ -10,13 +10,6 @@
 
 ---
 
-## 🎧 توضیح صوتی (۲ دقیقه و ۳۸ ثانیه)
-
-> 🔊 **[▶️ پخش توضیح کامل](audio/LML-PANEL-explained.mp3)** &nbsp;|&nbsp; یا بخش به بخش:
-> [۱ — معرفی](audio/part1.mp3) • [۲ — پشت صحنه](audio/part2.mp3) • [۳ — قابلیت‌ها](audio/part3.mp3)
-
----
-
 <div dir="rtl">
 
 ## 🚀 این پروژه چیه؟
@@ -35,21 +28,20 @@
 
 </div>
 
-```mermaid
-flowchart LR
-    U["📱 کاربر<br/>v2rayNG • Hiddify • sing-box"] -- "WebSocket + TLS" --> W
-    A["🧑‍💼 ادمین<br/>/panel"] --> W
-    T["✈️ تلگرام<br/>ربات + بکاپ"] --> W
-    subgraph W["⚡ Cloudflare Worker  (worker.js)"]
-        direction TB
-        R["Router"] --- AB["Anti-Ban"]
-        AU["Auth"] --- SUB["Subscription"]
-        E["🔌 VLESS Engine<br/>حجم‌شمار • قطع فوری"]
-        C["⏰ Cron"] --- S["🔍 Scanner"]
-    end
-    W --> DB[("🗄️ D1<br/>users • settings")]
-    W -- "TCP" --> NET["🌍 اینترنت آزاد"]
-    W --> N["🌐 نودهای مرکزی ۲۳ کشور"]
+```text
+  📱 کاربر (v2rayNG / Hiddify / sing-box)
+        │  WebSocket + TLS
+        ▼
+ ┌──────────────────────────────────────────┐        ┌──────────────────────┐
+ │        ⚡ Cloudflare Worker (worker.js)   │ ─────► │ 🗄️ D1: users/settings │
+ │                                          │        └──────────────────────┘
+ │  Router • Anti-Ban • Auth • Subscription │        ┌──────────────────────┐
+ │  🔌 VLESS Engine (حجم‌شمار + قطع فوری)    │ ─────► │ 🌍 اینترنت آزاد       │
+ │  ⏰ Cron • 🔍 Scanner • 📲 PWA            │        └──────────────────────┘
+ └──────────────────────────────────────────┘        ┌──────────────────────┐
+        ▲                  ▲                 ─────► │ 🌐 نودهای ۲۳ کشور     │
+        │                  │                         └──────────────────────┘
+  🧑‍💼 ادمین (/panel)   ✈️ تلگرام (ربات + بکاپ)
 ```
 
 <div dir="rtl">
